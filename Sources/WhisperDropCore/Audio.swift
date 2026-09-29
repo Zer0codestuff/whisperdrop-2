@@ -41,5 +41,15 @@ public struct Chunker: Sendable {
 
 public enum WAVEncoder {
     /// 16-bit PCM little-endian mono WAV file bytes.
-    public static func pcm16(_ samples: [Float], sampleRate: Int = whisperSampleRate) -> Data { Data() }
+    public static func pcm16(_ samples: [Float], sampleRate: Int = whisperSampleRate) -> Data {
+        var data = Data(capacity: 44 + samples.count * 2)
+        func append<T: FixedWidthInteger>(_ value: T) { withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) } }
+        let payload = UInt32(samples.count * 2)
+        data.append(contentsOf: Array("RIFF".utf8)); append(36 + payload)
+        data.append(contentsOf: Array("WAVEfmt ".utf8)); append(UInt32(16)); append(UInt16(1)); append(UInt16(1))
+        append(UInt32(sampleRate)); append(UInt32(sampleRate * 2)); append(UInt16(2)); append(UInt16(16))
+        data.append(contentsOf: Array("data".utf8)); append(payload)
+        for sample in samples { append(Int16((max(-1, min(1, sample)) * 32767).rounded())) }
+        return data
+    }
 }

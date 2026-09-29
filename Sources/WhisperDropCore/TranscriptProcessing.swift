@@ -15,7 +15,19 @@ public struct ServerTranscription: Sendable {
 public extension TranscriptOutput {
     /// Parses a whisper-server `verbose_json` response. Segment times are shifted by `offset` seconds and tagged with `speaker`.
     static func parseServer(_ data: Data, offset: Double = 0, speaker: Speaker? = nil) throws -> ServerTranscription {
-        ServerTranscription(segments: [], language: nil)
+        struct Output: Decodable {
+            struct Segment: Decodable { let start: Double; let end: Double; let text: String }
+            let language: String?
+            let text: String?
+            let segments: [Segment]?
+        }
+        let output = try JSONDecoder().decode(Output.self, from: data)
+        let raw = output.segments ?? output.text.map { [Output.Segment(start: 0, end: 0, text: $0)] } ?? []
+        let segments = raw.enumerated().map { index, value in
+            TranscriptSegment(id: index, start: value.start + offset, end: value.end + offset,
+                              text: value.text.trimmingCharacters(in: .whitespacesAndNewlines), speaker: speaker)
+        }.filter { !$0.text.isEmpty }
+        return ServerTranscription(segments: segments, language: output.language)
     }
     /// Plain text; when segments carry speakers, consecutive lines by the same speaker are grouped under "You:" / "Others:" labels.
     static func labeledText(_ segments: [TranscriptSegment]) -> String {
