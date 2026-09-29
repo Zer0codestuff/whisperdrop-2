@@ -318,6 +318,9 @@ private struct NotesPane: View {
             }.pickerStyle(.menu).labelsHidden().frame(width: 230)
         }
         SettingRow(title: "Language") { LanguagePicker(code: $settings.noteLanguage) }
+        SettingRow(title: "Words and names", detail: "Try a short list of subject terms in the spoken language.") {
+            TextField("Subject terms", text: $settings.noteVocabulary).textFieldStyle(.roundedBorder).frame(width: 230)
+        }
         SettingRow(title: "Keep the recording", detail: "Saves the audio next to the transcript. When off, it is deleted once the transcript is saved.") {
             Switch(isOn: $settings.keepNoteAudio)
         }

@@ -64,6 +64,7 @@ final class AppSettings: ObservableObject {
     @Published var keepReady: Bool { didSet { defaults.set(keepReady, forKey: "keepReady") } }
     @Published var noteSources: NoteSources { didSet { defaults.set(noteSources.rawValue, forKey: "noteSources") } }
     @Published var noteLanguage: String { didSet { defaults.set(noteLanguage, forKey: "noteLanguage") } }
+    @Published var noteVocabulary: String { didSet { defaults.set(noteVocabulary, forKey: "noteVocabulary") } }
     @Published var keepNoteAudio: Bool { didSet { defaults.set(keepNoteAudio, forKey: "keepNoteAudio") } }
     @Published var showInDock: Bool { didSet { defaults.set(showInDock, forKey: "showInDock") } }
 
@@ -83,6 +84,7 @@ final class AppSettings: ObservableObject {
         keepReady = bool("keepReady", false)
         noteSources = NoteSources(rawValue: defaults.string(forKey: "noteSources") ?? "") ?? .both
         noteLanguage = defaults.string(forKey: "noteLanguage") ?? "auto"
+        noteVocabulary = defaults.string(forKey: "noteVocabulary") ?? ""
         keepNoteAudio = bool("keepNoteAudio", true)
         showInDock = bool("showInDock", true)
     }

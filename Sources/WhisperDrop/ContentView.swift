@@ -13,6 +13,7 @@ struct ContentView: View {
     @EnvironmentObject private var store: AppStore
     @EnvironmentObject private var recorder: NoteRecorder
     @EnvironmentObject private var permissions: Permissions
+    @EnvironmentObject private var settings: AppSettings
     @AppStorage("permissionsOnboardingDone") private var onboardingDone = false
     @State private var targeted = false
     var body: some View {
@@ -28,6 +29,12 @@ struct ContentView: View {
         .frame(minWidth: 860, minHeight: 580)
         .background(Color.black)
         .tint(Palette.green)
+        .onChange(of: recorder.state) {
+            if case .failed(let message) = recorder.state {
+                store.error = message
+                recorder.dismissFailure()
+            }
+        }
         .overlay {
             if targeted {
                 RoundedRectangle(cornerRadius: 16).strokeBorder(Palette.green, lineWidth: 2)
@@ -59,6 +66,12 @@ struct ContentView: View {
         .alert("WhisperDrop", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
             Button("OK") { store.error = nil }
         } message: { Text(store.error ?? "") }
+        .alert("Check the note language", isPresented: $recorder.showLanguageReminder) {
+            Button("Start recording") { recorder.confirmStart() }
+            Button("Cancel", role: .cancel) { recorder.cancelStart() }
+        } message: {
+            Text("Selected: \(NoteLanguage.label(settings.noteLanguage)). Before recording, choose the language spoken in the lesson or meeting. You can change it next to New note.")
+        }
     }
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -152,6 +165,11 @@ struct ContentView: View {
             }
             Spacer(minLength: 8)
             if store.current?.status == .completed {
+                if let job = store.current, job.resolvedKind == .note, let audio = job.audioFile {
+                    Button { NSWorkspace.shared.activateFileViewerSelecting(NoteAudio.savedFiles(in: audio)) } label: {
+                        Image(systemName: "waveform")
+                    }.buttonStyle(.plain).help("Show saved audio in Finder").accessibilityLabel("Show saved audio")
+                }
                 Button(action: store.copyTranscript) { Image(systemName: "doc.on.doc") }.buttonStyle(.plain).help("Copy transcript").accessibilityLabel("Copy transcript")
                 Menu {
                     Button("Plain text (.txt)") { store.export("txt") }
@@ -185,7 +203,10 @@ struct ContentView: View {
                     if job.segments.isEmpty {
                         Text("No speech was detected in this recording.").foregroundStyle(Palette.secondary)
                     }
-                    ForEach(job.segments) { segment in
+                    if let warning = job.error, !job.segments.isEmpty {
+                        Text(warning).font(.system(size: 12)).foregroundStyle(.orange)
+                    }
+                    ForEach(TranscriptOutput.paragraphs(job.segments)) { segment in
                         HStack(alignment: .firstTextBaseline, spacing: 22) {
                             Text(segment.timeLabel).font(.system(size: 11)).monospacedDigit().foregroundStyle(Palette.secondary).frame(width: 44, alignment: .leading)
                             if let speaker = segment.speaker {

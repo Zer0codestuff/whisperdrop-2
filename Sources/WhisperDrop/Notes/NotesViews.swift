@@ -11,6 +11,10 @@ struct LiveNoteView: View {
         VStack(spacing: 0) {
             header
             Rectangle().fill(LivePalette.line).frame(height: 1)
+            if let warning = recorder.warning {
+                Text(warning).font(.system(size: 12)).foregroundStyle(.orange)
+                    .padding(.horizontal, 32).padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
+            }
             ZStack {
                 Color.black
                 if recorder.segments.isEmpty { waiting } else { transcript }
@@ -33,6 +37,7 @@ struct LiveNoteView: View {
                 HStack(spacing: 6) {
                     Image(systemName: LiveNote.symbol(recorder.sources))
                     Text(recorder.sources.label)
+                    Text("· " + NoteLanguage.label(recorder.sessionLanguage))
                 }.font(.system(size: 11)).foregroundStyle(LivePalette.secondary)
             }
             Spacer(minLength: 8)
@@ -49,7 +54,7 @@ struct LiveNoteView: View {
         VStack(spacing: 16) {
             LiveLevelBars(level: max(recorder.micLevel, recorder.systemLevel), active: recorder.state == .recording, maxHeight: 28)
             Text(recorder.state == .starting ? "Starting…" : "Listening.").font(.system(size: 24, weight: .medium))
-            Text(isFailed ? failure : "Text appears here a few seconds after someone speaks.")
+            Text(isFailed ? failure : "Text appears after a pause, or after about a minute of continuous speech.")
                 .font(.system(size: 13)).foregroundStyle(isFailed ? Color.red : LivePalette.secondary)
                 .multilineTextAlignment(.center).frame(maxWidth: 390)
         }.padding(32).frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -69,7 +74,7 @@ struct LiveNoteView: View {
                             }.font(.system(size: 11)).foregroundStyle(LivePalette.secondary)
                         }
                     }.padding(.bottom, 8)
-                    ForEach(recorder.segments) { segment in
+                    ForEach(TranscriptOutput.paragraphs(recorder.segments)) { segment in
                         HStack(alignment: .firstTextBaseline, spacing: 14) {
                             Text(segment.timeLabel).font(.system(size: 11)).monospacedDigit().foregroundStyle(LivePalette.secondary).frame(width: 44, alignment: .leading)
                             if let speaker = segment.speaker {
@@ -144,25 +149,37 @@ struct NewNoteButton: View {
     @EnvironmentObject private var settings: AppSettings
     var body: some View {
         let active = LiveNote.isActive(recorder.state)
-        Menu {
-            ForEach(NoteSources.allCases) { source in
-                Button { LiveNote.start(recorder, source) } label: {
-                    Label(source.label + (source == settings.noteSources ? " (default)" : ""), systemImage: LiveNote.symbol(source))
+        VStack(alignment: .leading, spacing: 9) {
+            HStack {
+                Text("Note language").foregroundStyle(LivePalette.secondary)
+                Spacer(minLength: 0)
+                Picker("Note language", selection: $settings.noteLanguage) {
+                    ForEach(AppStore.languages, id: \.0) { Text($0.1).tag($0.0) }
+                }.labelsHidden().frame(maxWidth: 110).disabled(active)
+            }.font(.system(size: 11))
+            Menu {
+                ForEach(NoteSources.allCases) { source in
+                    Button { LiveNote.start(recorder, source) } label: {
+                        Label(source.label + (source == settings.noteSources ? " (default)" : ""), systemImage: LiveNote.symbol(source))
+                    }
                 }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: active ? "record.circle.fill" : "record.circle").foregroundStyle(active ? LivePalette.green : .white)
+                    Text(active ? "Recording" : "New note")
+                }.frame(maxWidth: .infinity)
             }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: active ? "record.circle.fill" : "record.circle").foregroundStyle(active ? LivePalette.green : .white)
-                Text(active ? "Recording" : "New note")
-            }.frame(maxWidth: .infinity)
+            .menuStyle(.borderlessButton).menuIndicator(.hidden)
+            .font(.system(size: 12, weight: .medium))
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .background(Color.white.opacity(0.065), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(LivePalette.line))
+            .disabled(active)
+            .help(active ? "A note is recording" : "Record a call, lecture or meeting")
+            Toggle("Keep audio", isOn: $settings.keepNoteAudio)
+                .toggleStyle(.checkbox).font(.system(size: 11)).foregroundStyle(LivePalette.secondary)
+                .disabled(active)
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden)
-        .font(.system(size: 12, weight: .medium))
-        .padding(.horizontal, 12).padding(.vertical, 10)
-        .background(Color.white.opacity(0.065), in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(LivePalette.line))
-        .disabled(active)
-        .help(active ? "A note is recording" : "Record a call, lecture or meeting")
     }
 }
 

@@ -18,6 +18,11 @@ final class NoteRecorder: ObservableObject {
     @Published var title = ""
     /// Shown while recording continues after a source or a chunk fails.
     @Published private(set) var warning: String?
+    @Published var showLanguageReminder = false
+    @Published private(set) var sessionLanguage = "auto"
+    private var pendingStart: NoteSources?
+    private var sessionVocabulary = ""
+    private var sessionKeepAudio = true
 
     private let settings: AppSettings
     private let host: ModelHost
@@ -28,14 +33,14 @@ final class NoteRecorder: ObservableObject {
     private let clock = ContinuousClock()
     private let wake = NoteWake()
 
-    private var microphone: MicCapture?
-    private var systemTap: SystemAudioTap?
+    private var microphone: (any NoteCaptureSource)?
+    private var systemTap: (any NoteCaptureSource)?
     private var youWriter: AudioFileWriter?
     private var othersWriter: AudioFileWriter?
     private let micPending = NoteSampleBuffer()
     private let systemPending = NoteSampleBuffer()
-    private var micChunker = Chunker()
-    private var systemChunker = Chunker()
+    private var micChunker = Chunker.lecture
+    private var systemChunker = Chunker.lecture
     private var transcript = NoteTranscriptState()
     private var queue: [NoteQueuedChunk] = []
     private var nextSequence = 0
@@ -79,8 +84,35 @@ final class NoteRecorder: ObservableObject {
         self.defaults = defaults
     }
 
+    func requestStart(_ sources: NoteSources) {
+        guard state == .idle else { return }
+        if !defaults.bool(forKey: "noteLanguageReminderSeen") {
+            pendingStart = sources
+            showLanguageReminder = true
+        } else { start(sources) }
+    }
+
+    func confirmStart() {
+        guard let sources = pendingStart else { return }
+        pendingStart = nil
+        showLanguageReminder = false
+        defaults.set(true, forKey: "noteLanguageReminderSeen")
+        start(sources)
+    }
+
+    func cancelStart() { pendingStart = nil; showLanguageReminder = false }
+
+    func dismissFailure() {
+        guard case .failed = state else { return }
+        resetFields()
+        state = .idle
+    }
+
     func start(_ sources: NoteSources) {
         guard state == .idle else { return }
+        sessionLanguage = settings.noteLanguage
+        sessionVocabulary = settings.noteVocabulary
+        sessionKeepAudio = settings.keepNoteAudio
         generation += 1
         let token = generation
         self.sources = sources
@@ -99,6 +131,7 @@ final class NoteRecorder: ObservableObject {
     /// Stops capture, transcribes remaining audio, then calls `onFinish`.
     func stop() {
         guard state == .starting || state == .recording else { return }
+        updateElapsed()
         state = .finishing
         stopRequested = true
         haltCapture()
@@ -131,6 +164,7 @@ final class NoteRecorder: ObservableObject {
     func finishForTermination() {
         terminationHandoff = true
         if state == .starting || state == .recording {
+            updateElapsed()
             state = .finishing
             stopRequested = true
         }
@@ -335,12 +369,13 @@ final class NoteRecorder: ObservableObject {
     private func tick() {
         guard state == .recording || state == .finishing else { return }
         updateElapsed()
+        checkCaptureHealth()
         drainPendingAudio(flush: false)
         savePartialIfDue()
     }
 
     private func updateElapsed() {
-        guard let startedAt else { return }
+        guard !stopRequested, let startedAt else { return }
         elapsed = NoteClock.seconds(clock.now - startedAt)
     }
 
@@ -400,8 +435,8 @@ final class NoteRecorder: ObservableObject {
     private func transcribe(_ item: NoteQueuedChunk, token: Int) async {
         let model = sessionModel ?? settings.model
         let speaker = NoteSpeakers.label(stream: item.stream, bothLive: labelingSpeakers)
-        let prompt = transcript.prompt(for: item.stream, chunkDuration: item.chunk.duration)
-        let language = NoteLanguage.requestCode(setting: settings.noteLanguage, pinned: transcript.pinnedLanguage)
+        let prompt = NotePrompt.prompt(previousText: transcript.text(for: item.stream), chunkDuration: item.chunk.duration, vocabulary: sessionVocabulary)
+        let language = NoteLanguage.requestCode(setting: sessionLanguage, pinned: transcript.pinnedLanguage)
         let samples = item.chunk.samples
         let offset = item.chunk.start
         let task = Task { @MainActor in
@@ -419,7 +454,7 @@ final class NoteRecorder: ObservableObject {
         }
         transcribeTask = nil
         guard token == generation, !discardRequested else { return }
-        segments = transcript.accept(result, stream: item.stream, languageSetting: settings.noteLanguage)
+        segments = transcript.accept(result, stream: item.stream, languageSetting: sessionLanguage, chunk: item.chunk)
     }
 
     private func transcribeOnce(samples: [Float], model: TranscriptionModel, language: String, prompt: String?, offset: Double, speaker: Speaker?) async throws -> ServerTranscription {
@@ -457,6 +492,7 @@ final class NoteRecorder: ObservableObject {
             state = .idle
             return
         }
+        updateElapsed()
         stopRequested = true
         state = .finishing
         haltCapture()
@@ -468,7 +504,7 @@ final class NoteRecorder: ObservableObject {
         updateElapsed()
         closeWriters()
         writePartialTranscript()
-        let keepAudio = settings.keepNoteAudio || terminationHandoff
+        let keepAudio = sessionKeepAudio || terminationHandoff
         if !keepAudio { deleteCapturedAudio() }
         let folder = noteFolder ?? self.folder
         let job = NoteJobs.make(
@@ -480,7 +516,7 @@ final class NoteRecorder: ObservableObject {
             duration: elapsed,
             keepAudio: keepAudio,
             detectedSpeech: sawSpeech,
-            transcriptionWarning: transcriptionWarning
+            transcriptionWarning: warning
         )
         releaseModel()
         resetFields()
@@ -510,11 +546,13 @@ final class NoteRecorder: ObservableObject {
     }
 
     private func haltCapture() {
+        checkCaptureHealth()
         microphone?.stop()
+        systemTap?.stop()
+        checkCaptureHealth()
         microphone?.onSamples = nil
         microphone?.onLevel = nil
         microphone = nil
-        systemTap?.stop()
         systemTap?.onSamples = nil
         systemTap?.onLevel = nil
         systemTap = nil
@@ -523,8 +561,19 @@ final class NoteRecorder: ObservableObject {
     private func closeWriters() {
         youWriter?.close()
         othersWriter?.close()
+        checkCaptureHealth()
         youWriter = nil
         othersWriter = nil
+    }
+
+    private func checkCaptureHealth() {
+        if (microphone?.droppedPacketCount ?? 0) + (systemTap?.droppedPacketCount ?? 0) > 0 {
+            captureWarning = "Some audio was lost during capture. The transcript may have gaps."
+        }
+        if youWriter?.hasFailed == true || othersWriter?.hasFailed == true {
+            captureWarning = "The recording could not be fully saved. Check available disk space."
+        }
+        publishWarning()
     }
 
     private func removeNoteFolder() {
@@ -568,17 +617,25 @@ final class NoteRecorder: ObservableObject {
         stopRequested = false
         discardRequested = false
         noteFolder = nil
-        micChunker = Chunker()
-        systemChunker = Chunker()
+        micChunker = .lecture
+        systemChunker = .lecture
         micPending.clear()
         systemPending.clear()
     }
 }
 
 /// Builds the capture objects NoteRecorder owns. Tests can substitute fakes.
+protocol NoteCaptureSource: AnyObject {
+    var onSamples: (@Sendable ([Float]) -> Void)? { get set }
+    var onLevel: (@Sendable (Float) -> Void)? { get set }
+    var droppedPacketCount: Int { get }
+    func start() throws
+    func stop()
+}
+
 struct NoteCaptureFactory {
-    var makeMicrophone: () -> MicCapture
-    var makeSystemTap: () -> SystemAudioTap
+    var makeMicrophone: () -> any NoteCaptureSource
+    var makeSystemTap: () -> any NoteCaptureSource
     var makeWriter: (URL) throws -> AudioFileWriter
     var requestMicrophoneAccess: () async -> Bool
     var systemAudioSupported: () -> Bool

@@ -36,6 +36,9 @@ enum NoteCaptureError: LocalizedError {
 /// (`g_lang` key, `"en"`) and the full English name (`"english"`). The compare is case-sensitive.
 /// Settings and pinned requests use the short code, which is what the rest of the app stores.
 enum NoteLanguage {
+    @MainActor static func label(_ code: String) -> String {
+        AppStore.languages.first { $0.0 == code }?.1 ?? code
+    }
     static let entries: [(code: String, name: String)] = [
         ("en", "english"), ("zh", "chinese"), ("de", "german"), ("es", "spanish"),
         ("ru", "russian"), ("ko", "korean"), ("fr", "french"), ("ja", "japanese"),
@@ -102,9 +105,10 @@ enum NotePrompt {
     }
 
     /// `chunkDuration` is the chunk's sample length. The chunk contract has no separate speech-duration field.
-    static func prompt(previousText: String, chunkDuration: Double) -> String? {
+    static func prompt(previousText: String, chunkDuration: Double, vocabulary: String = "") -> String? {
         guard chunkDuration >= minimumDuration else { return nil }
-        let value = tail(previousText)
+        let terms = vocabulary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = terms.isEmpty ? tail(previousText) : String(terms.prefix(400))
         return value.isEmpty ? nil : value
     }
 }
@@ -118,6 +122,11 @@ enum NoteSpeakers {
 }
 
 enum NoteAudio {
+    static func savedFiles(in folder: URL) -> [URL] {
+        let files = [NoteCopy.microphoneFile, NoteCopy.systemFile].map { folder.appendingPathComponent($0) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        return files.isEmpty ? [folder] : files
+    }
     /// Anything louder than this counts as non-silent when confirming the system tap. Exact zeros do not.
     static let audibleAmplitude: Float = 0.001
 
@@ -162,6 +171,9 @@ enum NoteQueue {
 struct NoteTranscriptState {
     var labelingSpeakers = false
     private(set) var pinnedLanguage: String?
+    private var candidateLanguage: String?
+    private var micCommittedEnd: Double?
+    private var systemCommittedEnd: Double?
     private(set) var micText = ""
     private(set) var systemText = ""
     private(set) var micLines: [TranscriptSegment] = []
@@ -182,19 +194,39 @@ struct NoteTranscriptState {
         return NoteJobs.renumber(micLines + systemLines)
     }
 
-    mutating func accept(_ result: ServerTranscription, stream: NoteStream, languageSetting: String) -> [TranscriptSegment] {
-        if NoteLanguage.isAuto(languageSetting), pinnedLanguage == nil,
-           let detected = result.language, let code = NoteLanguage.whisperCode(for: detected) {
-            pinnedLanguage = code
-        }
+    mutating func accept(_ result: ServerTranscription, stream: NoteStream, languageSetting: String,
+                         chunk: AudioChunk? = nil) -> [TranscriptSegment] {
         let speaker = NoteSpeakers.label(stream: stream, bothLive: labelingSpeakers)
-        let cleaned = HallucinationFilter.clean(result.segments).compactMap { segment -> TranscriptSegment? in
+        let committed = stream == .microphone ? micCommittedEnd : systemCommittedEnd
+        let cleaned = HallucinationFilter.clean(result.segments, removeNeighborRepeats: false).compactMap { segment -> TranscriptSegment? in
             let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { return nil }
             var copy = segment
             copy.text = text
             copy.speaker = speaker
+            if let stable = chunk?.stableUntil, let words = segment.words,
+               words.map(\.text).joined().split(whereSeparator: \.isWhitespace).joined(separator: " ") == text {
+                let selected = words.filter { word in
+                    word.end <= stable && (committed == nil || word.end > committed!)
+                }
+                guard let first = selected.first, let last = selected.last else { return nil }
+                copy.words = selected
+                copy.text = selected.map(\.text).joined().trimmingCharacters(in: .whitespacesAndNewlines)
+                copy.start = first.start
+                copy.end = last.end
+            } else if let committed, segment.end <= committed {
+                return nil
+            }
             return copy
+        }
+        if !cleaned.isEmpty, NoteLanguage.isAuto(languageSetting), pinnedLanguage == nil,
+           let detected = result.language, let code = NoteLanguage.whisperCode(for: detected) {
+            if candidateLanguage == code { pinnedLanguage = code }
+            else { candidateLanguage = code }
+        }
+        if let end = cleaned.last?.end {
+            if stream == .microphone { micCommittedEnd = end }
+            else { systemCommittedEnd = end }
         }
         let addition = cleaned.map(\.text).joined(separator: " ")
         if addition.isEmpty {
@@ -263,6 +295,7 @@ enum NoteJobs {
         job.modelName = modelName
         job.duration = duration
         job.audioFile = keepAudio ? folder : nil
+        job.error = transcriptionWarning
         if segments.isEmpty {
             job.error = detectedSpeech ? (transcriptionWarning ?? NoteCopy.noSpeech) : NoteCopy.noSpeech
         }

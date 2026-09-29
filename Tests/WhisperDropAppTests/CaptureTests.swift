@@ -3,6 +3,75 @@ import XCTest
 @testable import WhisperDrop
 
 final class CaptureTests: XCTestCase {
+    func testHandoffKeepsCaptureOrderWhenEarlierSlotsAreReused() throws {
+        let firstEntered = DispatchSemaphore(value: 0)
+        let releaseFirst = DispatchSemaphore(value: 0)
+        let secondEntered = DispatchSemaphore(value: 0)
+        let releaseSecond = DispatchSemaphore(value: 0)
+        let lock = NSLock()
+        var values: [Int] = []
+        let queue = PCMSlotQueue(payloadCapacity: 4096, label: "test.capture-order") { packet in
+            let value = Int((packet.payload.load(as: Float.self) * 100).rounded())
+            lock.lock(); values.append(value); lock.unlock()
+            if value == 1 { firstEntered.signal(); _ = releaseFirst.wait(timeout: .now() + 5) }
+            if value == 2 { secondEntered.signal(); _ = releaseSecond.wait(timeout: .now() + 5) }
+        }
+        queue.start()
+        queue.publish(try numberedBuffer(1))
+        XCTAssertEqual(firstEntered.wait(timeout: .now() + 5), .success)
+        for value in 2...4 { queue.publish(try numberedBuffer(value)) }
+        releaseFirst.signal()
+        XCTAssertEqual(secondEntered.wait(timeout: .now() + 5), .success)
+        queue.publish(try numberedBuffer(5))
+        releaseSecond.signal()
+        queue.stop()
+        XCTAssertEqual(values, [1, 2, 3, 4, 5])
+        XCTAssertEqual(queue.droppedPacketCount, 0)
+    }
+
+    func testHandoffReportsOverflowAndDrainsAcceptedPackets() throws {
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let lock = NSLock()
+        var delivered = 0
+        let queue = PCMSlotQueue(payloadCapacity: 4096, label: "test.capture-overflow") { _ in
+            lock.lock(); delivered += 1; let first = delivered == 1; lock.unlock()
+            if first { entered.signal(); _ = release.wait(timeout: .now() + 5) }
+        }
+        queue.start()
+        let buffer = try numberedBuffer(1)
+        queue.publish(buffer)
+        XCTAssertEqual(entered.wait(timeout: .now() + 5), .success)
+        for _ in 0..<64 { queue.publish(buffer) }
+        XCTAssertGreaterThan(queue.droppedPacketCount, 0)
+        release.signal()
+        queue.stop()
+        XCTAssertEqual(delivered + queue.droppedPacketCount, 65)
+    }
+
+    func testClosingWriterDrainsQueuedAudioInOrder() throws {
+        let url = temporaryCAF()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let writer = try AudioFileWriter(url: url)
+        for index in 0..<100 { writer.append([Float](repeating: Float(index) / 100, count: 320)) }
+        writer.close()
+        let file = try AVAudioFile(forReading: url)
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 32_000))
+        try file.read(into: buffer)
+        XCTAssertEqual(file.length, 32_000)
+        let samples = try XCTUnwrap(buffer.floatChannelData?[0])
+        for index in 0..<100 { XCTAssertEqual(samples[index * 320], Float(index) / 100, accuracy: 0.0001) }
+        XCTAssertFalse(writer.hasFailed)
+    }
+
+    private func numberedBuffer(_ value: Int) throws -> AVAudioPCMBuffer {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 320))
+        buffer.frameLength = 320
+        for index in 0..<320 { buffer.floatChannelData![0][index] = Float(value) / 100 }
+        return buffer
+    }
+
     func testAudioFileRoundTrip() throws {
         let url = temporaryCAF()
         defer { try? FileManager.default.removeItem(at: url) }
@@ -35,6 +104,7 @@ final class CaptureTests: XCTestCase {
         let writer = try AudioFileWriter(url: url)
         let samples = sine(count: 16_000, amplitude: 0.2)
         writer.append(samples)
+        writer.flush()
 
         let frames: AVAudioFramePosition
         let rate: Double

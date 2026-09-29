@@ -35,12 +35,15 @@ final class PCMSlotQueue: @unchecked Sendable {
     private static let filling: Int32 = 1
     private static let ready: Int32 = 2
     private static let draining: Int32 = 3
-    private static let slotCount = 4
+    private static let slotCount = 32
     private static let headerSize = MemoryLayout<SlotHeader>.stride
 
     private let slotStride: Int
     private let storage: UnsafeMutableRawPointer
     private let phases: UnsafeMutablePointer<Int32>
+    private let sequences: UnsafeMutablePointer<UInt64>
+    private var nextSequence: UInt64 = 0
+    private let drops = OSAllocatedUnfairLock(initialState: 0)
     private let lock = OSAllocatedUnfairLock()
     private let semaphore = DispatchSemaphore(value: 0)
     private let worker: DispatchQueue
@@ -57,6 +60,8 @@ final class PCMSlotQueue: @unchecked Sendable {
         storage = .allocate(byteCount: slotStride * Self.slotCount, alignment: 16)
         phases = .allocate(capacity: Self.slotCount)
         phases.initialize(repeating: Self.empty, count: Self.slotCount)
+        sequences = .allocate(capacity: Self.slotCount)
+        sequences.initialize(repeating: 0, count: Self.slotCount)
         worker = DispatchQueue(label: label)
         worker.setSpecific(key: workerKey, value: 1)
     }
@@ -65,6 +70,8 @@ final class PCMSlotQueue: @unchecked Sendable {
         stop()
         phases.deinitialize(count: Self.slotCount)
         phases.deallocate()
+        sequences.deinitialize(count: Self.slotCount)
+        sequences.deallocate()
         storage.deallocate()
     }
 
@@ -76,6 +83,8 @@ final class PCMSlotQueue: @unchecked Sendable {
                 phases[index] = Self.empty
             }
             workerRunning = true
+            nextSequence = 0
+            drops.withLockUnchecked { $0 = 0 }
             return true
         }
         guard launch else { return }
@@ -88,6 +97,8 @@ final class PCMSlotQueue: @unchecked Sendable {
             }
         }
     }
+
+    var droppedPacketCount: Int { drops.withLockUnchecked { $0 } }
 
     /// Drains packets already copied, then lets the worker exit. Safe to call from the worker.
     func stop() {
@@ -132,19 +143,27 @@ final class PCMSlotQueue: @unchecked Sendable {
         guard bufferCount > 0, bufferCount <= 8 else { return }
 
         let claimed = lock.withLockIfAvailableUnchecked { () -> Int in
-            if stopped { return -1 }
+            if stopped { return -2 }
             for index in 0..<Self.slotCount where phases[index] == Self.empty {
                 phases[index] = Self.filling
+                sequences[index] = nextSequence
+                nextSequence &+= 1
                 return index
             }
             return -1
         }
-        guard let index = claimed, index >= 0 else { return }
+        if claimed == -2 { return }
+        guard let index = claimed, index >= 0 else {
+            drops.withLockUnchecked { $0 += 1 }
+            return
+        }
 
         var accepted = false
         defer {
             if !accepted {
                 lock.withLockUnchecked { phases[index] = Self.empty }
+                drops.withLockUnchecked { $0 += 1 }
+                semaphore.signal()
             }
         }
 
@@ -196,9 +215,14 @@ final class PCMSlotQueue: @unchecked Sendable {
     private func drainAll() -> Bool {
         while true {
             let index = lock.withLockUnchecked { () -> Int in
-                for slot in 0..<Self.slotCount where phases[slot] == Self.ready {
-                    phases[slot] = Self.draining
-                    return slot
+                var oldest: Int?
+                for slot in 0..<Self.slotCount where phases[slot] == Self.ready || phases[slot] == Self.filling {
+                    if oldest == nil || sequences[slot] < sequences[oldest!] { oldest = slot }
+                }
+                if let oldest {
+                    guard phases[oldest] == Self.ready else { return -1 }
+                    phases[oldest] = Self.draining
+                    return oldest
                 }
                 return stopped ? -2 : -1
             }

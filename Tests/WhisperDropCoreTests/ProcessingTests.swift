@@ -169,7 +169,7 @@ final class ProcessingTests: XCTestCase {
             segment("First line."),
             segment("Second line."),
         ]
-        XCTAssertEqual(TranscriptOutput.labeledText(plain), "First line.\nSecond line.")
+        XCTAssertEqual(TranscriptOutput.labeledText(plain), "First line. Second line.")
 
         let spoken = [
             segment("Hello.", speaker: .you),
@@ -182,6 +182,57 @@ final class ProcessingTests: XCTestCase {
             TranscriptOutput.labeledText(spoken),
             "You: Hello. How are you?\n\nOthers: I am fine. Good.\n\nYou: Back to me."
         )
+    }
+
+    func testLectureForcedCutRetainsContextAndFinalTail() {
+        var chunker = Chunker.lecture
+        let first = chunker.append(tone(60))
+        XCTAssertEqual(first.count, 1)
+        XCTAssertEqual(first[0].duration, 60, accuracy: 0.001)
+        XCTAssertEqual(first[0].stableUntil!, 59, accuracy: 0.001)
+        XCTAssertTrue(chunker.append(tone(4)).isEmpty)
+        let tail = chunker.flush()!
+        XCTAssertEqual(tail.start, 58, accuracy: 0.001)
+        XCTAssertEqual(tail.duration, 6, accuracy: 0.001)
+        XCTAssertEqual(tail.stableUntil!, 64, accuracy: 0.001)
+        XCTAssertNil(chunker.flush())
+
+        var exact = Chunker.lecture
+        _ = exact.append(tone(60))
+        XCTAssertEqual(exact.flush()?.duration, 2)
+    }
+
+    func testLectureKeepsQuietSpeechAndCutsInsidePause() {
+        var chunker = Chunker.lecture
+        let chunks = chunker.append(tone(32, amplitude: 0.009) + [Float](repeating: 0, count: 49_600))
+        XCTAssertEqual(chunks.count, 1)
+        XCTAssertEqual(chunks[0].duration, 32.4, accuracy: 0.03)
+        XCTAssertEqual(chunks[0].stableUntil!, chunks[0].duration, accuracy: 0.001)
+        XCTAssertTrue(chunks[0].hasSpeech)
+        XCTAssertNil(chunker.flush())
+    }
+
+    func testServerTokenPiecesBecomeTimedWholeWords() throws {
+        let json = #"{"language":"italian","segments":[{"start":0,"end":3,"text":" Nazionale convessa.","words":[{"word":" Naz","start":0,"end":0.5},{"word":"ionale","start":0.5,"end":1},{"word":" conv","start":1,"end":2},{"word":"essa","start":2,"end":2.8},{"word":".","start":2.8,"end":3}]}]}"#
+        let parsed = try TranscriptOutput.parseServer(Data(json.utf8), offset: 58)
+        XCTAssertEqual(parsed.segments[0].words?.map(\.text), [" Nazionale", " convessa."])
+        XCTAssertEqual(parsed.segments[0].words?.last?.end, 61)
+    }
+
+    func testUnspacedLanguageKeepsTokenTimingForBoundaryTrimming() throws {
+        let json = #"{"language":"japanese","segments":[{"start":0,"end":2,"text":"資料","words":[{"word":"資","start":0,"end":1},{"word":"料","start":1,"end":2}]}]}"#
+        let result = try TranscriptOutput.parseServer(Data(json.utf8))
+        XCTAssertEqual(result.segments[0].words?.count, 2)
+        XCTAssertEqual(result.segments[0].words?.map(\.text).joined(), "資料")
+    }
+
+    func testParagraphBreakWaitsForSentenceEnd() {
+        let lines = [segment("A sentence that", start: 0, end: 1),
+                     segment("continues.", start: 5, end: 6),
+                     segment("A new paragraph.", start: 10, end: 11)]
+        let rows = TranscriptOutput.paragraphs(lines)
+        XCTAssertEqual(rows.map(\.text), ["A sentence that continues.", "A new paragraph."])
+        XCTAssertEqual(rows.map(\.start), [0, 10])
     }
 
     private func tone(_ seconds: Double, amplitude: Float = 0.5) -> [Float] {

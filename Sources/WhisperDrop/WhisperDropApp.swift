@@ -10,21 +10,24 @@ struct WhisperDropApp: App {
     @StateObject private var dictation: DictationController
     @StateObject private var recorder: NoteRecorder
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    private let appDefaults: UserDefaults
     init() {
         let arguments = ProcessInfo.processInfo.arguments
         let root: URL?
         if let i = arguments.firstIndex(of: "--data-dir"), arguments.indices.contains(i + 1) {
             root = URL(fileURLWithPath: arguments[i + 1])
         } else { root = nil }
+        let defaults = root == nil ? UserDefaults.standard : UserDefaults(suiteName: "io.github.zer0codestuff.whisperdrop2.verification")!
+        appDefaults = defaults
         let store = AppStore(root: root)
-        let settings = AppSettings()
+        let settings = AppSettings(defaults: defaults)
         let host = ModelHost(tool: { try store.tool($0) }, modelFile: { model in
             let file = store.modelsFolder.appendingPathComponent(model.filename)
             guard FileManager.default.fileExists(atPath: file.path) else {
                 throw AppFailure("Download the \(model.name) model in Models first.")
             }
             return file
-        })
+        }, processFile: root?.appendingPathComponent("whisper-server.pid"))
         host.residency = settings.residency
         host.keepReady = settings.keepReady
         let permissions = Permissions()
@@ -33,7 +36,7 @@ struct WhisperDropApp: App {
             settings: settings,
             host: host,
             folder: store.root.appendingPathComponent("Notes", isDirectory: true),
-            onFinish: { store.addNote($0) }
+            onFinish: { store.addNote($0) }, defaults: defaults
         )
         _store = StateObject(wrappedValue: store)
         _settings = StateObject(wrappedValue: settings)
@@ -64,7 +67,8 @@ struct WhisperDropApp: App {
             }
             CommandGroup(replacing: .appInfo) {
                 Button("About WhisperDrop 2") {
-                    NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "WhisperDrop 2", .applicationVersion: "2.1.0", .credits: NSAttributedString(string: "Local transcription for macOS.\nOriginally started with Luca Arisci.\ngithub.com/LucaArisci/whisper-drop")])
+                    let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Development"
+                    NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "WhisperDrop 2", .applicationVersion: version, .credits: NSAttributedString(string: "Local transcription for macOS.\nOriginally started with Luca Arisci.\ngithub.com/LucaArisci/whisper-drop")])
                 }
             }
         }
@@ -89,6 +93,7 @@ struct WhisperDropApp: App {
             .environmentObject(dictation)
             .environmentObject(recorder)
             .preferredColorScheme(.dark)
+            .defaultAppStorage(appDefaults)
     }
     @MainActor private func bindDelegate() {
         delegate.store = store

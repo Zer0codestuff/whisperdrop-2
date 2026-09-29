@@ -1,5 +1,6 @@
 import AudioToolbox
 import Foundation
+import os
 
 /// Contract file. Appends 16 kHz mono Float samples to a file incrementally so a crash keeps what was recorded.
 final class AudioFileWriter: @unchecked Sendable {
@@ -10,6 +11,8 @@ final class AudioFileWriter: @unchecked Sendable {
     private var handle: FileHandle?
     private var closed = false
     private var failed = false
+    private var unsyncedBytes = 0
+    private let failure = OSAllocatedUnfairLock(initialState: false)
 
     /// Byte offset of the data chunk's size field: 8 file header + 12 desc header + 32 desc + 4 'data'.
     private static let chunkSizeOffset: UInt64 = 56
@@ -40,16 +43,34 @@ final class AudioFileWriter: @unchecked Sendable {
         queue.setSpecific(key: queueKey, value: 1)
     }
 
-    /// Thread safe.
+    /// Enqueues writes so disk latency cannot stall the capture worker.
     func append(_ samples: [Float]) {
-        onQueue {
-            guard !closed, !failed, !samples.isEmpty, let handle else { return }
+        guard !samples.isEmpty else { return }
+        let data = Self.pcm16(samples)
+        queue.async { [self] in
+            guard !closed, !failed, let handle else { return }
             do {
-                try handle.write(contentsOf: Self.pcm16(samples))
-                try handle.synchronize()
+                try handle.write(contentsOf: data)
+                unsyncedBytes += data.count
+                if unsyncedBytes >= 32_000 {
+                    try handle.synchronize()
+                    unsyncedBytes = 0
+                }
             } catch {
                 failed = true
+                failure.withLockUnchecked { $0 = true }
             }
+        }
+    }
+
+    var hasFailed: Bool { failure.withLockUnchecked { $0 } }
+
+    /// Waits for queued samples to reach disk while leaving the file open.
+    func flush() {
+        onQueue {
+            do { try handle?.synchronize() }
+            catch { failure.withLockUnchecked { $0 = true } }
+            unsyncedBytes = 0
         }
     }
 
@@ -72,6 +93,7 @@ final class AudioFileWriter: @unchecked Sendable {
                 }
                 try handle.close()
             } catch {
+                failure.withLockUnchecked { $0 = true }
                 try? handle.close()
             }
             self.handle = nil

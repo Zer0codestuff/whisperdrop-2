@@ -111,8 +111,11 @@ struct MenuBarContent: View {
     @ViewBuilder private var newNoteRows: some View {
         Text("New note").font(.system(size: 11, weight: .medium)).foregroundStyle(LivePalette.secondary)
             .padding(.horizontal, 10).padding(.top, 2).padding(.bottom, 4)
+        Picker("Note language", selection: $settings.noteLanguage) {
+            ForEach(AppStore.languages, id: \.0) { Text($0.1).tag($0.0) }
+        }.font(.system(size: 11)).padding(.horizontal, 10)
         ForEach(NoteSources.allCases) { source in
-            Button { LiveNote.start(recorder, source); close() } label: {
+            Button { LiveNote.start(recorder, source); openMain() } label: {
                 MenuRowLabel(title: source.label, subtitle: source == settings.noteSources ? "Default" : nil, symbol: LiveNote.symbol(source))
             }
             .buttonStyle(MenuRowStyle())

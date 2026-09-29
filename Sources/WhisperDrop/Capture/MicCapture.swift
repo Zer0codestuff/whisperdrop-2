@@ -4,7 +4,8 @@ import Foundation
 import os
 
 /// Contract file. Captures the default input device as 16 kHz mono Float samples.
-final class MicCapture: @unchecked Sendable {
+final class MicCapture: NoteCaptureSource, @unchecked Sendable {
+    var droppedPacketCount: Int { handoff?.droppedPacketCount ?? 0 }
     /// Called on a background audio thread with 16 kHz mono samples.
     var onSamples: (@Sendable ([Float]) -> Void)? {
         didSet { listeners.withLockUnchecked { $0.samples = onSamples } }

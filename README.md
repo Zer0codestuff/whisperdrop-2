@@ -52,7 +52,9 @@ Hold fn to dictate. On a Mac, System Settings, Keyboard, set **Press 🌐 key to
 
 The model stays in memory according to the residency setting (after each use, or after 2, 10, 30 or 60 minutes idle, or for the whole time the app is open). **Keep model ready** in the menu bar overrides that and leaves it loaded. Quitting the app stops the resident `whisper-server` process.
 
-Notes are saved in the library. Speaker lines are copied and exported as "You" and "Others". Recorded audio is kept when **Keep note audio** is on.
+Notes are saved in the library. Paragraphs are copied and exported with "You" and "Others" labels when both sources are used. **Note language** and **Keep audio** are visible beside New note. The first recording reminds you to check the spoken language. Kept recordings can be revealed in Finder from the note's audio button.
+
+Lecture notes wait for pauses, with a 60-second maximum per request. Forced cuts retain two seconds of audio so boundary words can be completed on the next request. The capture queue preserves audio packet order and reports loss. See [lecture transcription tests](docs/note-transcription.md) for measurements and remaining recognition limits.
 
 ## Installation and Gatekeeper
 
@@ -62,7 +64,11 @@ Notes are saved in the library. Speaker lines are copied and exported as "You" a
 scripts/setup-local-signing.sh
 ```
 
-The build is **not notarized**. It is a development build, not a notarized public release. A downloaded copy may be blocked by Gatekeeper. A local signature does not remove that restriction.
+The downloadable release is **not notarized** and is signed with a local certificate rather than Developer ID. A downloaded copy may be blocked by Gatekeeper. The message "Apple cannot check the app for malicious software" means Apple cannot verify it. Apple uses a different warning when it detects malware or revoked authorization. A local signature does not remove the verification warning.
+
+To install, quit the previous version, copy **WhisperDrop 2.app** from the disk image to Applications, and replace the old copy. Notes, models and settings are stored outside the app and survive replacement. If Gatekeeper blocks it, try opening it once, then use **System Settings > Privacy & Security > Open Anyway** if you choose to trust this build. Follow [Apple's instructions](https://support.apple.com/en-us/102445). Do not change global security settings or use an installer that disables Gatekeeper.
+
+Locally built apps and apps you have already approved can behave differently from a fresh browser download. The browser's download quarantine and any existing app exception affect the first launch. Repackaging or changing an icon cannot guarantee a different warning on other Macs.
 
 Developer ID signing and Apple notarization require an Apple Developer Program membership. Once available, the bundle and all runtime executables need a distribution signing and notarization pipeline. Do not disable Gatekeeper globally. See [Apple's distribution guidance](https://developer.apple.com/developer-id/).
 
@@ -100,7 +106,7 @@ Original files are never overwritten. Export opens a standard save dialog. Remov
 
 The app is a Swift package. Open `Package.swift` in Xcode, or use the build scripts. `WhisperDropCore` holds input validation, model metadata, persisted jobs and subtitle conversion. The SwiftUI executable owns the queue, model downloads and bundled subprocesses.
 
-[AGENTS.md](AGENTS.md) records project constraints. [Verification notes](docs/verification.md) describe what has actually been checked. [Third-party notices](docs/third-party.md) cover runtime licenses and binary redistribution requirements.
+[AGENTS.md](AGENTS.md) records project constraints. [Lecture transcription tests](docs/note-transcription.md) describe the latest validation. [Third-party notices](docs/third-party.md) cover runtime licenses and binary redistribution requirements.
 
 ## License
 

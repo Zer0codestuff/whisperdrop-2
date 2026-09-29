@@ -61,14 +61,22 @@ public enum JobStatus: String, Codable, Sendable {
     public var isActive: Bool { [.downloading, .converting, .transcribing].contains(self) }
 }
 
+public struct TranscriptWord: Codable, Sendable {
+    public var start: Double
+    public var end: Double
+    public var text: String
+    public init(start: Double, end: Double, text: String) { self.start = start; self.end = end; self.text = text }
+}
+
 public struct TranscriptSegment: Identifiable, Codable, Sendable {
     public var id: Int
     public var start: Double
     public var end: Double
     public var text: String
     public var speaker: Speaker?
-    public init(id: Int, start: Double, end: Double, text: String, speaker: Speaker? = nil) {
-        self.id = id; self.start = start; self.end = end; self.text = text; self.speaker = speaker
+    public var words: [TranscriptWord]?
+    public init(id: Int, start: Double, end: Double, text: String, speaker: Speaker? = nil, words: [TranscriptWord]? = nil) {
+        self.id = id; self.start = start; self.end = end; self.text = text; self.speaker = speaker; self.words = words
     }
     /// `mm:ss`, or `h:mm:ss` from one hour on.
     public var timeLabel: String {
@@ -104,7 +112,7 @@ public struct TranscriptionJob: Identifiable, Codable, Sendable {
 }
 
 public enum MediaInput {
-    public static let extensions: Set<String> = ["mp3", "wav", "m4a", "ogg", "flac", "opus", "webm", "mp4", "aac", "aiff", "aif", "mov", "mkv", "wma", "m4v"]
+    public static let extensions: Set<String> = ["mp3", "wav", "caf", "m4a", "ogg", "flac", "opus", "webm", "mp4", "aac", "aiff", "aif", "mov", "mkv", "wma", "m4v"]
     public static func youtubeURL(_ text: String) -> URL? {
         guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
               ["https", "http"].contains(url.scheme?.lowercased() ?? ""),

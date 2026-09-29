@@ -16,26 +16,43 @@ public extension TranscriptOutput {
     /// Parses a whisper-server `verbose_json` response. Segment times are shifted by `offset` seconds and tagged with `speaker`.
     static func parseServer(_ data: Data, offset: Double = 0, speaker: Speaker? = nil) throws -> ServerTranscription {
         struct Output: Decodable {
-            struct Segment: Decodable { let start: Double; let end: Double; let text: String }
+            struct Segment: Decodable {
+                struct Token: Decodable { let word: String; let start: Double?; let end: Double? }
+                let start: Double; let end: Double; let text: String; let words: [Token]?
+            }
             let language: String?
             let text: String?
             let segments: [Segment]?
         }
         let output = try JSONDecoder().decode(Output.self, from: data)
-        let raw = output.segments ?? output.text.map { [Output.Segment(start: 0, end: 0, text: $0)] } ?? []
+        let raw = output.segments ?? output.text.map { [Output.Segment(start: 0, end: 0, text: $0, words: nil)] } ?? []
+        let unspacedLanguages: Set<String> = ["chinese", "zh", "japanese", "ja", "korean", "ko", "cantonese", "yue", "thai", "th", "lao", "lo", "myanmar", "my", "khmer", "km"]
+        let joinsWordPieces = !unspacedLanguages.contains(output.language?.lowercased() ?? "")
         let segments = raw.enumerated().map { index, value in
-            TranscriptSegment(id: index, start: value.start + offset, end: value.end + offset,
-                              text: value.text.trimmingCharacters(in: .whitespacesAndNewlines), speaker: speaker)
+            var words: [TranscriptWord] = []
+            for token in value.words ?? [] {
+                guard let start = token.start, let end = token.end, start >= 0, end >= start,
+                      !token.word.isEmpty else { continue }
+                if joinsWordPieces, token.word.first?.isWhitespace != true, !words.isEmpty {
+                    words[words.count - 1].text += token.word
+                    words[words.count - 1].end = max(words[words.count - 1].end, end + offset)
+                } else {
+                    words.append(TranscriptWord(start: start + offset, end: end + offset, text: token.word))
+                }
+            }
+            return TranscriptSegment(id: index, start: value.start + offset, end: value.end + offset,
+                              text: value.text.trimmingCharacters(in: .whitespacesAndNewlines), speaker: speaker,
+                              words: words.isEmpty ? nil : words)
         }.filter { !$0.text.isEmpty }
         return ServerTranscription(segments: segments, language: output.language)
     }
     /// Plain text; when segments carry speakers, consecutive lines by the same speaker are grouped under "You:" / "Others:" labels.
     static func labeledText(_ segments: [TranscriptSegment]) -> String {
-        let rows = segments.filter {
+        let rows = paragraphs(segments).filter {
             !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
         guard rows.contains(where: { $0.speaker != nil }) else {
-            return rows.map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }.joined(separator: "\n")
+            return rows.map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }.joined(separator: "\n\n")
         }
         var paragraphs: [String] = []
         var index = 0
@@ -45,7 +62,7 @@ public extension TranscriptOutput {
             while end < rows.count, rows[end].speaker == speaker { end += 1 }
             let body = rows[index..<end]
                 .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .joined(separator: " ")
+                .joined(separator: "\n\n")
             if let speaker {
                 paragraphs.append("\(speaker.label): \(body)")
             } else {
@@ -55,15 +72,41 @@ public extension TranscriptOutput {
         }
         return paragraphs.joined(separator: "\n\n")
     }
+
+    /// Reading paragraphs are independent of inference and subtitle segment boundaries.
+    static func paragraphs(_ segments: [TranscriptSegment], targetCharacters: Int = 420) -> [TranscriptSegment] {
+        var result: [TranscriptSegment] = []
+        for segment in segments where !segment.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guard var last = result.last else { result.append(segment); continue }
+            let complete = endsSentence(last.text)
+            let newParagraph = last.speaker != segment.speaker
+                || (complete && (segment.start - last.end >= 3 || last.text.count >= targetCharacters))
+            if newParagraph { result.append(segment); continue }
+            last.text += " " + segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            last.end = max(last.end, segment.end)
+            last.words = nil
+            result[result.count - 1] = last
+        }
+        return result.enumerated().map { index, segment in
+            var copy = segment; copy.id = index; return copy
+        }
+    }
+
+    private static func endsSentence(_ text: String) -> Bool {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\"'”’)]}"))
+        guard !value.hasSuffix(".."), let last = value.last else { return false }
+        return last == "." || last == "!" || last == "?"
+    }
 }
 
 public enum HallucinationFilter {
     /// Removes known silence hallucinations, empty and bracketed non-speech segments, and runs of repeated text.
-    public static func clean(_ segments: [TranscriptSegment]) -> [TranscriptSegment] {
+    public static func clean(_ segments: [TranscriptSegment], removeNeighborRepeats: Bool = true) -> [TranscriptSegment] {
         var kept: [TranscriptSegment] = []
         for segment in segments {
             guard let text = cleanedText(segment.text) else { continue }
-            if let previous = kept.last,
+            if removeNeighborRepeats, let previous = kept.last,
                neighborRepeat(previous.text, text) {
                 continue
             }

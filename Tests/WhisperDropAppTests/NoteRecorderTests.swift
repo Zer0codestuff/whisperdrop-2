@@ -31,6 +31,8 @@ final class NoteRecorderTests: XCTestCase {
         XCTAssertNil(NotePrompt.prompt(previousText: "hello", chunkDuration: 1.99))
         XCTAssertEqual(NotePrompt.prompt(previousText: "hello", chunkDuration: 2), "hello")
         XCTAssertNil(NotePrompt.prompt(previousText: "   ", chunkDuration: 30))
+        XCTAssertEqual(NotePrompt.prompt(previousText: "Prior words", chunkDuration: 30, vocabulary: "  Convex set, objective function  "), "Convex set, objective function")
+        XCTAssertEqual(NotePrompt.prompt(previousText: "Prior words", chunkDuration: 30, vocabulary: String(repeating: "a", count: 450))?.count, 400)
         XCTAssertEqual(NoteClock.seconds(.seconds(1) + .milliseconds(500)), 1.5, accuracy: 0.000_001)
     }
 
@@ -72,11 +74,11 @@ final class NoteRecorderTests: XCTestCase {
         XCTAssertEqual(published.map(\.id), [0])
         XCTAssertNil(published[0].speaker)
         XCTAssertEqual(published[0].text, "Lecture line")
-        XCTAssertEqual(state.pinnedLanguage, "en")
+        XCTAssertNil(state.pinnedLanguage)
         XCTAssertEqual(state.prompt(for: .microphone, chunkDuration: 3), "Lecture line")
         XCTAssertNil(state.prompt(for: .system, chunkDuration: 3))
 
-        let ignored = ServerTranscription(segments: [TranscriptSegment(id: 0, start: 4, end: 5, text: "Still English")], language: "french")
+        let ignored = ServerTranscription(segments: [TranscriptSegment(id: 0, start: 4, end: 5, text: "Still English")], language: "english")
         _ = state.accept(ignored, stream: .microphone, languageSetting: "auto")
         XCTAssertEqual(state.pinnedLanguage, "en")
         XCTAssertEqual(state.text(for: .microphone), "Lecture line Still English")
@@ -146,6 +148,44 @@ final class NoteRecorderTests: XCTestCase {
             timeZone: zone
         )
         XCTAssertEqual(skipped.error, "A part of the recording could not be transcribed and was skipped.")
+    }
+
+    func testForcedCutDefersWholeBoundaryWordAndRemovesOverlap() {
+        var state = NoteTranscriptState()
+        let first = TranscriptSegment(id: 0, start: 56, end: 60, text: "The  national\ncommunity",
+            words: [TranscriptWord(start: 56, end: 57, text: "The"),
+                    TranscriptWord(start: 57, end: 58.5, text: "  national"),
+                    TranscriptWord(start: 58.5, end: 60, text: " community")])
+        let chunk = AudioChunk(start: 0, samples: [], hasSpeech: true, stableUntil: 59)
+        _ = state.accept(ServerTranscription(segments: [first], language: "italian"), stream: .microphone, languageSetting: "auto", chunk: chunk)
+        XCTAssertEqual(state.segments.map(\.text), ["The  national"])
+        let next = TranscriptSegment(id: 0, start: 58, end: 62, text: "national community speaks.",
+            words: [TranscriptWord(start: 58, end: 58.5, text: "national"),
+                    TranscriptWord(start: 58.5, end: 60, text: " community"),
+                    TranscriptWord(start: 60, end: 62, text: " speaks.")])
+        _ = state.accept(ServerTranscription(segments: [next], language: "italian"), stream: .microphone, languageSetting: "auto",
+                         chunk: AudioChunk(start: 58, samples: [], hasSpeech: true, stableUntil: 64))
+        XCTAssertEqual(TranscriptOutput.labeledText(state.segments), "The  national community speaks.")
+        XCTAssertEqual(state.pinnedLanguage, "it")
+    }
+
+    func testNoteKeepsRealRepeatedSentencesAndDoesNotPinSilence() {
+        var state = NoteTranscriptState()
+        _ = state.accept(ServerTranscription(segments: [], language: "english"), stream: .microphone, languageSetting: "auto")
+        XCTAssertNil(state.pinnedLanguage)
+        let result = ServerTranscription(segments: [
+            TranscriptSegment(id: 0, start: 0, end: 2, text: "The constraint applies to every point."),
+            TranscriptSegment(id: 1, start: 2.1, end: 4, text: "The constraint applies to every point.")], language: "italian")
+        _ = state.accept(result, stream: .microphone, languageSetting: "auto")
+        XCTAssertEqual(state.segments.count, 2)
+        XCTAssertNil(state.pinnedLanguage)
+    }
+
+    func testWarningSurvivesInPartialCompletedNote() {
+        let job = NoteJobs.make(folder: URL(fileURLWithPath: "/tmp/example"), customTitle: "Example", recordedAt: Date(),
+            segments: [TranscriptSegment(id: 0, start: 0, end: 1, text: "Some speech.")], modelName: "Turbo", duration: 60,
+            keepAudio: true, detectedSpeech: true, transcriptionWarning: "One chunk failed.")
+        XCTAssertEqual(job.error, "One chunk failed.")
     }
 
     func testRenumberSortsByStartThenPreviousId() {

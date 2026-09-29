@@ -28,7 +28,8 @@ final class ModelHostTests: XCTestCase {
         struct Missing: LocalizedError {
             var errorDescription: String? { "Download the Turbo model before transcribing." }
         }
-        let host = ModelHost(tool: { _ in URL(fileURLWithPath: "/usr/bin/true") }, modelFile: { _ in throw Missing() })
+        let pidFile = FileManager.default.temporaryDirectory.appendingPathComponent("WhisperDrop-host-test-\(UUID().uuidString).pid")
+        let host = ModelHost(tool: { _ in URL(fileURLWithPath: "/usr/bin/true") }, modelFile: { _ in throw Missing() }, processFile: pidFile)
         defer { host.shutdown() }
         let model = TranscriptionModel.catalog.first { $0.id == "turbo" }!
         do {
@@ -76,6 +77,7 @@ final class ModelHostTests: XCTestCase {
         let samples = try decodePCM16WAV(Data(contentsOf: wavURL))
         XCTAssertEqual(samples.count, 80_000)
 
+        let pidFile = FileManager.default.temporaryDirectory.appendingPathComponent("WhisperDrop-host-test-\(UUID().uuidString).pid")
         let host = ModelHost(
             tool: { name in
                 let url = binary.deletingLastPathComponent().appendingPathComponent(name)
@@ -89,7 +91,7 @@ final class ModelHostTests: XCTestCase {
                     throw AppFailure("Download the \(requested.name) model before transcribing.")
                 }
                 return modelURL
-            }
+            }, processFile: pidFile
         )
         defer { host.shutdown() }
 
@@ -116,7 +118,7 @@ final class ModelHostTests: XCTestCase {
         }
         let pid = try XCTUnwrap(host.serverProcessIdentifier)
         XCTAssertTrue(isAlive(pid))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: ModelHost.pidFileURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: pidFile.path))
 
         let transcript = try await host.transcribe(samples, model: model, language: "en", shortClip: true)
         XCTAssertFalse(transcript.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -153,7 +155,7 @@ final class ModelHostTests: XCTestCase {
         host.shutdown()
         XCTAssertEqual(host.state, .unloaded)
         XCTAssertFalse(isAlive(restarted))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: ModelHost.pidFileURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: pidFile.path))
         XCTAssertNil(host.serverProcessIdentifier)
     }
 }

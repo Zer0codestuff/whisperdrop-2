@@ -108,7 +108,7 @@ enum LiveNote {
     @MainActor static func start(_ recorder: NoteRecorder, _ sources: NoteSources) {
         guard !isActive(recorder.state) else { return }
         recorder.title = LiveFormat.noteTitle()
-        recorder.start(sources)
+        recorder.requestStart(sources)
     }
     static func symbol(_ sources: NoteSources) -> String {
         switch sources {

@@ -1,7 +1,5 @@
 import Foundation
 
-/// Contract file. Signatures are fixed; bodies are implemented by the core worker.
-
 /// 16 kHz mono Float samples in -1...1 are used everywhere.
 public let whisperSampleRate = 16_000
 
@@ -71,29 +69,53 @@ public struct AudioChunk: Sendable {
     public var start: Double
     public var samples: [Float]
     public var hasSpeech: Bool
+    /// End of audio safe to commit. A forced cut leaves a short tail for the next request.
+    public var stableUntil: Double?
     public var duration: Double { Double(samples.count) / Double(whisperSampleRate) }
-    public init(start: Double, samples: [Float], hasSpeech: Bool) {
-        self.start = start; self.samples = samples; self.hasSpeech = hasSpeech
+    public init(start: Double, samples: [Float], hasSpeech: Bool, stableUntil: Double? = nil) {
+        self.start = start; self.samples = samples; self.hasSpeech = hasSpeech; self.stableUntil = stableUntil
     }
 }
 
 /// Splits a continuous stream into chunks for Whisper, cutting at silences near `target` seconds and never exceeding `maxLength`.
 public struct Chunker: Sendable {
+    public struct Options: Sendable {
+        public var speechRMS: Float = 0.015
+        public var preRoll: Double = 0.3
+        public var tailPadding: Double = 0.08
+        public var minimumSilence: Double = 0.4
+        public var longPause: Double = 3
+        public var searchStart: Double = 15
+        public var cutAfter: Double = 25
+        public var minimumSpeech: Double = 0.3
+        public var overlap: Double = 0
+        public var unsettledTail: Double = 0
+        public init() {}
+
+        /// Lecture notes can wait for a pause and retain audio context across a forced cut.
+        public static var lecture: Self {
+            var value = Self()
+            value.speechRMS = 0.004
+            value.preRoll = 0.5
+            value.tailPadding = 0.4
+            value.minimumSilence = 0.6
+            value.longPause = 3
+            value.searchStart = 25
+            value.cutAfter = 50
+            value.minimumSpeech = 0.1
+            value.overlap = 2
+            value.unsettledTail = 1
+            return value
+        }
+    }
     public let target: Double
     public let maxLength: Double
     public let minLength: Double
+    public let options: Options
 
     /// Thresholds from the meeting chunker. Sample counts are exact at 16 kHz and on the 20 ms grid.
     private enum Gate {
         static let frame = 320
-        static let speechRMS: Float = 0.015
-        static let preRoll = 4_800
-        static let tailPad = 1_280
-        static let minSilence = 6_400
-        static let longPause = 48_000
-        static let bandStart = 240_000
-        static let earlyCut = 400_000
-        static let minSpeech = 4_800
     }
 
     // `storage[head...]` is the uncommitted tail. `absoluteSample` is the recording index of that tail.
@@ -105,11 +127,14 @@ public struct Chunker: Sendable {
     private var frameHead = 0
     private var framedSamples = 0
 
-    public init(target: Double = 20, maxLength: Double = 28, minLength: Double = 1) {
+    public init(target: Double = 20, maxLength: Double = 28, minLength: Double = 1, options: Options = .init()) {
         self.target = target
         self.maxLength = maxLength
         self.minLength = minLength
+        self.options = options
     }
+
+    public static var lecture: Self { Self(target: 45, maxLength: 60, minLength: 15, options: .lecture) }
 
     private var pendingCount: Int { storage.count - head }
     private var cachedFrames: Int { frameRMS.count - frameHead }
@@ -136,7 +161,7 @@ public struct Chunker: Sendable {
             let cut = hard > 0 ? min(pendingCount, hard) : pendingCount
             guard cut > 0 else { return nil }
             let speechSamples = speechSampleCount(prefix: cut)
-            if speechSamples >= Gate.minSpeech {
+            if speechSamples >= sampleCount(for: options.minimumSpeech) {
                 let chunk = makeChunk(sampleCount: cut, speechSamples: speechSamples)
                 discardPrefix(cut)
                 return chunk
@@ -156,10 +181,15 @@ public struct Chunker: Sendable {
             guard let cut = selectCut(flush: flush), cut > 0 else { break }
             let speechSamples = speechSampleCount(prefix: cut)
             let longEnough = flush || cut >= sampleCount(for: minLength)
-            if longEnough && speechSamples >= Gate.minSpeech {
-                emitted.append(makeChunk(sampleCount: cut, speechSamples: speechSamples))
+            var retained = 0
+            if longEnough && speechSamples >= sampleCount(for: options.minimumSpeech) {
+                let forced = cut == sampleCount(for: maxLength) && !hasSilenceAt(cut)
+                emitted.append(makeChunk(sampleCount: cut, speechSamples: speechSamples, forced: forced))
+                if forced {
+                    retained = min(sampleCount(for: options.overlap), max(0, cut - Gate.frame))
+                }
             }
-            discardPrefix(cut)
+            discardPrefix(cut - retained)
             if pendingCount >= before && pendingCount > 0 { break }
         }
         return emitted
@@ -172,26 +202,27 @@ public struct Chunker: Sendable {
         return nil
     }
 
-    /// Open 3 s pause, then the longest pause in the 15 s...maxLength band, else a hard cut.
+    /// Waits for a pause, then selects a closed pause in the search band, else uses the limit.
     private func selectLiveCut() -> Int? {
         let count = pendingCount
         if count == 0 { return nil }
         let hard = sampleCount(for: maxLength)
         if hard <= 0 { return nil }
-        let early = min(Gate.earlyCut, hard)
+        let early = min(sampleCount(for: options.cutAfter), hard)
         let floor = sampleCount(for: minLength)
         let runs = silenceRuns()
 
         if let trail = runs.last(where: \.reachesEnd),
-           trail.length >= Gate.longPause,
+           trail.length >= sampleCount(for: options.longPause),
            trail.start >= floor {
             return cutPoint(trail, limit: min(count, hard), floor: floor)
         }
-        if count < Gate.bandStart && count < hard { return nil }
+        let bandStart = sampleCount(for: options.searchStart)
+        if count < bandStart && count < hard { return nil }
 
         let searchEnd = min(count, hard)
         let eligible = runs.filter { run in
-            run.length >= Gate.minSilence && run.start >= Gate.bandStart && run.start < searchEnd
+            run.length >= sampleCount(for: options.minimumSilence) && run.start >= bandStart && run.start < searchEnd
         }
         if count >= hard {
             if let best = bestRun(eligible) {
@@ -221,9 +252,9 @@ public struct Chunker: Sendable {
         var runs: [SilenceRun] = []
         var index = 0
         while index < frames {
-            if frameRMS[frameHead + index] < Gate.speechRMS {
+            if frameRMS[frameHead + index] < options.speechRMS {
                 var next = index + 1
-                while next < frames, frameRMS[frameHead + next] < Gate.speechRMS {
+                while next < frames, frameRMS[frameHead + next] < options.speechRMS {
                     next += 1
                 }
                 runs.append(SilenceRun(
@@ -249,7 +280,7 @@ public struct Chunker: Sendable {
 
     private func cutPoint(_ run: SilenceRun, limit: Int, floor: Int) -> Int {
         guard limit > 0 else { return 0 }
-        var cut = run.start + Gate.tailPad
+        var cut = run.start + sampleCount(for: options.tailPadding)
         if cut > run.end { cut = run.end }
         if cut > limit { cut = limit }
         if cut < floor { cut = min(floor, limit) }
@@ -261,33 +292,43 @@ public struct Chunker: Sendable {
         let frames = cachedFrames
         var speechAt: Int?
         if frames > 0 {
-            for index in 0..<frames where frameRMS[frameHead + index] >= Gate.speechRMS {
+            for index in 0..<frames where frameRMS[frameHead + index] >= options.speechRMS {
                 speechAt = index * Gate.frame
                 break
             }
         }
         if let speechAt {
-            let drop = speechAt - Gate.preRoll
+            let drop = speechAt - sampleCount(for: options.preRoll)
             if drop > 0 { discardPrefix(drop) }
-        } else if pendingCount > Gate.preRoll {
-            discardPrefix(pendingCount - Gate.preRoll)
+        } else if pendingCount > sampleCount(for: options.preRoll) {
+            discardPrefix(pendingCount - sampleCount(for: options.preRoll))
         }
     }
 
     private func speechSampleCount(prefix count: Int) -> Int {
         let frames = min(count, framedSamples) / Gate.frame
         var speechFrames = 0
-        for index in 0..<frames where frameRMS[frameHead + index] >= Gate.speechRMS {
+        for index in 0..<frames where frameRMS[frameHead + index] >= options.speechRMS {
             speechFrames += 1
         }
         return speechFrames * Gate.frame
     }
 
-    private func makeChunk(sampleCount: Int, speechSamples: Int) -> AudioChunk {
+    private func makeChunk(sampleCount: Int, speechSamples: Int, forced: Bool = false) -> AudioChunk {
         let count = min(sampleCount, pendingCount)
         let samples = Array(storage[head..<(head + count)])
         let start = Double(absoluteSample) / Double(whisperSampleRate)
-        return AudioChunk(start: start, samples: samples, hasSpeech: speechSamples >= Gate.minSpeech)
+        let end = Double(absoluteSample + count) / Double(whisperSampleRate)
+        let stable = forced ? max(start, end - options.unsettledTail) : end
+        return AudioChunk(start: start, samples: samples, hasSpeech: speechSamples >= self.sampleCount(for: options.minimumSpeech),
+                          stableUntil: options.overlap > 0 ? stable : nil)
+    }
+
+    private func hasSilenceAt(_ cut: Int) -> Bool {
+        let frames = min(cut / Gate.frame, cachedFrames)
+        let needed = max(1, sampleCount(for: options.minimumSilence) / Gate.frame)
+        guard frames >= needed else { return false }
+        return (frames - needed..<frames).allSatisfy { frameRMS[frameHead + $0] < options.speechRMS }
     }
 
     private mutating func cacheNewFrames() {

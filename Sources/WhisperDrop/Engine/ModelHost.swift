@@ -62,6 +62,8 @@ final class ModelHost: ObservableObject {
 
     private let tool: (String) throws -> URL
     private let modelFile: (TranscriptionModel) throws -> URL
+    private let processFile: URL
+    private let preserveWords: Bool
     private let session: URLSession
     private let healthSession: URLSession
     private let stderrTail = StderrTail()
@@ -87,9 +89,12 @@ final class ModelHost: ObservableObject {
     /// - Parameters:
     ///   - tool: locates bundled executables by name (e.g. "whisper-server").
     ///   - modelFile: returns the local file of an installed model, throwing a user-facing error if it is not downloaded.
-    init(tool: @escaping (String) throws -> URL, modelFile: @escaping (TranscriptionModel) throws -> URL) {
+    init(tool: @escaping (String) throws -> URL, modelFile: @escaping (TranscriptionModel) throws -> URL,
+         processFile: URL? = nil, preserveWords: Bool = true) {
         self.tool = tool
         self.modelFile = modelFile
+        self.processFile = processFile ?? Self.pidFileURL
+        self.preserveWords = preserveWords
         session = Self.makeSession(requestTimeout: 120, resourceTimeout: 120)
         healthSession = Self.makeSession(requestTimeout: 2, resourceTimeout: 2)
         chain = Task {}
@@ -380,7 +385,7 @@ final class ModelHost: ObservableObject {
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.httpBody = Self.multipart(boundary: boundary, wav: wav, language: Self.serverLanguage(language),
-                                          prompt: prompt, audioContext: audioContext)
+                                          prompt: prompt, audioContext: audioContext, preserveWords: preserveWords)
         // The caller's Task is not this chain link, so cancellation is delivered through `cancel`.
         return try await withCheckedThrowingContinuation { continuation in
             let task = session.dataTask(with: request) { data, response, error in
@@ -420,7 +425,7 @@ final class ModelHost: ObservableObject {
         return trimmed
     }
 
-    private static func multipart(boundary: String, wav: Data, language: String, prompt: String?, audioContext: Int?) -> Data {
+    private static func multipart(boundary: String, wav: Data, language: String, prompt: String?, audioContext: Int?, preserveWords: Bool) -> Data {
         var body = Data()
         func add(_ string: String) { body.append(Data(string.utf8)) }
         add("--\(boundary)\r\n")
@@ -432,8 +437,11 @@ final class ModelHost: ObservableObject {
             ("response_format", "verbose_json"),
             ("temperature", "0.0"),
             ("no_language_probabilities", "true"),
+            ("translate", "false"),
             ("language", language)
         ]
+        // Keep word timing for overlap, without the server's 60-character wrapping.
+        if preserveWords { fields += [("max_len", "-1"), ("token_timestamps", "true")] }
         if let prompt, !prompt.isEmpty { fields.append(("prompt", prompt)) }
         if let audioContext, audioContext > 0 { fields.append(("audio_ctx", String(audioContext))) }
         for (name, value) in fields {
@@ -614,7 +622,7 @@ final class ModelHost: ObservableObject {
     // MARK: - Stale process
 
     private func reapStaleServer() {
-        let url = Self.pidFileURL
+        let url = processFile
         guard let text = try? String(contentsOf: url, encoding: .utf8) else { return }
         let parts = text.split(whereSeparator: \.isWhitespace).map(String.init)
         defer { try? FileManager.default.removeItem(at: url) }
@@ -625,7 +633,7 @@ final class ModelHost: ObservableObject {
 
     private func writePIDFile(_ pid: pid_t) {
         livePID = pid
-        let url = Self.pidFileURL
+        let url = processFile
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try "\(pid) \(Self.pidMarker)\n".write(to: url, atomically: true, encoding: .utf8)
@@ -636,7 +644,7 @@ final class ModelHost: ObservableObject {
 
     private func removePIDFile() {
         livePID = 0
-        try? FileManager.default.removeItem(at: Self.pidFileURL)
+        try? FileManager.default.removeItem(at: processFile)
     }
 
     nonisolated private static func terminate(_ pid: pid_t) {

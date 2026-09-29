@@ -8,7 +8,8 @@ import os
 import ScreenCaptureKit
 
 /// Contract file. Captures audio played by other apps (meeting participants) as 16 kHz mono Float samples.
-final class SystemAudioTap: @unchecked Sendable {
+final class SystemAudioTap: NoteCaptureSource, @unchecked Sendable {
+    var droppedPacketCount: Int { handoff?.droppedPacketCount ?? 0 }
     /// Called on a background audio thread with 16 kHz mono samples.
     var onSamples: (@Sendable ([Float]) -> Void)? {
         didSet { listeners.withLockUnchecked { $0.samples = onSamples } }
