@@ -76,14 +76,18 @@ public enum HallucinationFilter {
 
     /// Cleans dictation output into one line of text ready to insert. Returns nil when nothing meaningful was said.
     ///
-    /// A lone "Thank you." is treated as the silence hallucination Whisper emits on quiet audio.
-    /// The segment type has no no-speech probability, so the denylist is the signal.
+    /// Dictation audio is already speech-gated before it reaches Whisper, so a real "Thank you." or "Grazie."
+    /// is kept. Only bracketed non-speech tags and subtitle credit lines are dropped here.
     public static func dictationText(_ transcription: ServerTranscription) -> String? {
-        let line = collapseWhitespace(clean(transcription.segments).map(\.text).joined(separator: " "))
-        guard !line.isEmpty else { return nil }
-        let key = normalizedTranscript(line)
-        if matchesExact(key) || isLooped(key) || containsCredit(key) { return nil }
-        return line
+        let kept = transcription.segments.compactMap { segment -> String? in
+            let text = collapseWhitespace(removingNonSpeechAnnotations(segment.text))
+            let key = normalizedTranscript(text)
+            guard !key.isEmpty else { return nil }
+            if key.count <= 160, dictationCreditMarkers.contains(where: { key.contains($0) }) { return nil }
+            return text
+        }
+        let line = collapseWhitespace(kept.joined(separator: " "))
+        return line.isEmpty ? nil : line
     }
 
     private static func cleanedText(_ raw: String) -> String? {
@@ -227,6 +231,20 @@ public enum HallucinationFilter {
         "thanks for watching",
         "thank you for watching",
         "please subscribe",
+    ].map(normalizedTranscript)
+
+    /// Subtitle credit lines that never come from someone dictating.
+    private static let dictationCreditMarkers: [String] = [
+        "amara org",
+        "subtitles by",
+        "sottotitoli a cura",
+        "sottotitoli creati",
+        "sous titres realises",
+        "sous titres réalisés",
+        "subtitulos realizados",
+        "subtítulos realizados",
+        "untertitel im auftrag",
+        "legendas pela",
     ].map(normalizedTranscript)
 
     private static let annotationPhrases: Set<String> = [

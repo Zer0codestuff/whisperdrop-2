@@ -117,21 +117,21 @@ final class ProcessingTests: XCTestCase {
         ])
     }
 
-    func testDictationTextDropsLoneThankYouFromSilentAudio() {
-        // Whisper prints "Thank you." on quiet audio (openai/whisper discussion 679).
-        // There is no energy field on ServerTranscription, so that only-input is the silent-like case.
-        let silent = ServerTranscription(
-            segments: [segment(" Thank you. ")],
-            language: "english"
-        )
-        XCTAssertNil(HallucinationFilter.dictationText(silent))
+    func testDictationTextKeepsRealThanksAndDropsTagsAndCredits() {
+        // Dictation audio is speech-gated, so a spoken "Thank you." or "Grazie." must survive.
+        XCTAssertEqual(HallucinationFilter.dictationText(ServerTranscription(segments: [segment(" Thank you. ")], language: "en")), "Thank you.")
+        XCTAssertEqual(HallucinationFilter.dictationText(ServerTranscription(segments: [segment("Grazie.")], language: "it")), "Grazie.")
 
         let said = ServerTranscription(segments: [
             segment("  Send the file. "),
+            segment("[BLANK_AUDIO]"),
             segment("Thank you."),
-            segment("I need it today."),
+            segment("I need it (music) today."),
+            segment("Subtitles by the Amara.org community"),
         ], language: "english")
-        XCTAssertEqual(HallucinationFilter.dictationText(said), "Send the file. I need it today.")
+        XCTAssertEqual(HallucinationFilter.dictationText(said), "Send the file. Thank you. I need it today.")
+        XCTAssertNil(HallucinationFilter.dictationText(ServerTranscription(segments: [segment("[Music]")], language: nil)))
+        XCTAssertNil(HallucinationFilter.dictationText(ServerTranscription(segments: [segment("Sottotitoli a cura di QTSS")], language: nil)))
         XCTAssertNil(HallucinationFilter.dictationText(ServerTranscription(segments: [], language: nil)))
     }
 

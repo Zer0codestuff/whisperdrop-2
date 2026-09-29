@@ -32,6 +32,11 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(result.segments.first?.speaker, .others)
         XCTAssertEqual(result.text, "Hi.")
     }
+    func testTimeLabelShowsHoursPastOneHour() {
+        XCTAssertEqual(TranscriptSegment(id: 0, start: 61.9, end: 62, text: "a").timeLabel, "01:01")
+        XCTAssertEqual(TranscriptSegment(id: 0, start: 3599, end: 3600, text: "a").timeLabel, "59:59")
+        XCTAssertEqual(TranscriptSegment(id: 0, start: 3661, end: 3662, text: "a").timeLabel, "1:01:01")
+    }
     func testWAVHeaderAndLength() {
         let data = WAVEncoder.pcm16([0, 1, -1])
         XCTAssertEqual(data.count, 44 + 6)

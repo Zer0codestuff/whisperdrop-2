@@ -70,7 +70,12 @@ public struct TranscriptSegment: Identifiable, Codable, Sendable {
     public init(id: Int, start: Double, end: Double, text: String, speaker: Speaker? = nil) {
         self.id = id; self.start = start; self.end = end; self.text = text; self.speaker = speaker
     }
-    public var timeLabel: String { String(format: "%02d:%02d", Int(start) / 60, Int(start) % 60) }
+    /// `mm:ss`, or `h:mm:ss` from one hour on.
+    public var timeLabel: String {
+        let total = max(0, Int(start))
+        if total >= 3600 { return String(format: "%d:%02d:%02d", total / 3600, (total / 60) % 60, total % 60) }
+        return String(format: "%02d:%02d", total / 60, total % 60)
+    }
 }
 
 public struct TranscriptionJob: Identifiable, Codable, Sendable {
