@@ -9,14 +9,22 @@ fetch() {
   if [[ ! -f "$path" ]]; then curl --fail --location --retry 3 "$url" -o "$path.part"; mv "$path.part" "$path"; fi
   printf '%s  %s\n' "$expected" "$path" | shasum -a 256 --check
 }
-if [[ ! -x .runtime/bin/whisper-cli ]]; then
+configure_whisper() {
   if [[ ! -d .runtime/src/whisper.cpp/.git ]]; then
     git clone --depth 1 --branch v1.9.4 https://github.com/ggml-org/whisper.cpp.git .runtime/src/whisper.cpp
   fi
   [[ "$(git -C .runtime/src/whisper.cpp rev-parse HEAD)" == 927cfce34f31707e17f2bff35c349632fb9e2c3a ]]
   cmake -S .runtime/src/whisper.cpp -B .runtime/src/whisper.cpp/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 -DCMAKE_OSX_ARCHITECTURES=arm64 -DBUILD_SHARED_LIBS=OFF -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON -DWHISPER_BUILD_TESTS=OFF
+}
+if [[ ! -x .runtime/bin/whisper-cli ]]; then
+  configure_whisper
   cmake --build .runtime/src/whisper.cpp/build --target whisper-cli -j 6
   cp .runtime/src/whisper.cpp/build/bin/whisper-cli .runtime/bin/
+fi
+if [[ ! -x .runtime/bin/whisper-server ]]; then
+  configure_whisper
+  cmake --build .runtime/src/whisper.cpp/build --target whisper-server -j 6
+  cp .runtime/src/whisper.cpp/build/bin/whisper-server .runtime/bin/
 fi
 fetch https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz .runtime/src/ffmpeg.tar.xz 464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c
 if [[ ! -d .runtime/src/ffmpeg-8.1.2 ]]; then tar -xf .runtime/src/ffmpeg.tar.xz -C .runtime/src; fi
