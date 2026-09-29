@@ -1,0 +1,30 @@
+name: Swift checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  core:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select an Xcode with the macOS 26 SDK
+        shell: bash
+        run: |
+          xcode_path="$(python3 - <<'PY'
+          import glob, re
+          paths = glob.glob('/Applications/Xcode_*.app')
+          eligible = []
+          for path in paths:
+              numbers = tuple(map(int, re.findall(r'\d+', path)))
+              if numbers and numbers[0] >= 26:
+                  eligible.append((numbers, path))
+          if not eligible:
+              raise SystemExit('This build requires Xcode 26 or later.')
+          print(max(eligible)[1] + '/Contents/Developer')
+          PY
+          )"
+          sudo xcode-select -s "$xcode_path"
+      - name: Test Swift package
+        run: swift test

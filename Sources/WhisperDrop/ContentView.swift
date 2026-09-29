@@ -1,0 +1,316 @@
+import SwiftUI
+import UniformTypeIdentifiers
+import WhisperDropCore
+
+private enum Palette {
+    static let green = Color(red: 43 / 255, green: 214 / 255, blue: 107 / 255)
+    static let secondary = Color(white: 0.65)
+    static let line = Color(white: 0.165)
+    static let selected = Color(red: 13 / 255, green: 32 / 255, blue: 20 / 255)
+}
+
+struct ContentView: View {
+    @EnvironmentObject private var store: AppStore
+    @State private var targeted = false
+    var body: some View {
+        HStack(spacing: 0) {
+            sidebar.frame(width: 262)
+            Rectangle().fill(Palette.line).frame(width: 1)
+            VStack(spacing: 0) {
+                header
+                Rectangle().fill(Palette.line).frame(height: 1)
+                ZStack {
+                    Color.black
+                    if let job = store.current { detail(job) } else { emptyState }
+                }
+                controls.padding(.horizontal, 28).padding(.bottom, 24).padding(.top, 12)
+            }
+        }
+        .frame(minWidth: 860, minHeight: 580)
+        .background(Color.black)
+        .tint(Palette.green)
+        .overlay {
+            if targeted {
+                RoundedRectangle(cornerRadius: 16).strokeBorder(Palette.green, lineWidth: 2)
+                    .background(Palette.green.opacity(0.06)).padding(8).allowsHitTesting(false)
+            }
+        }
+        .onDrop(of: [.fileURL], isTargeted: $targeted) { providers in
+            for provider in providers {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url else { return }
+                    Task { @MainActor in store.addFiles([url]) }
+                }
+            }
+            return !providers.isEmpty
+        }
+        .sheet(isPresented: $store.showModels) { ModelsView().environmentObject(store) }
+        .sheet(isPresented: $store.showLink) { LinkView().environmentObject(store) }
+        .sheet(isPresented: $store.showDiagnostics) { diagnostics }
+        .alert("WhisperDrop", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
+            Button("OK") { store.error = nil }
+        } message: { Text(store.error ?? "") }
+    }
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text("WhisperDrop").font(.system(size: 21, weight: .semibold, design: .rounded))
+                Text("2").font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.green)
+            }.padding(.top, 46).padding(.horizontal, 24)
+            HStack(spacing: 8) {
+                Button(action: store.chooseFiles) { Label("Add files", systemImage: "plus").frame(maxWidth: .infinity) }
+                    .buttonStyle(QuietButton())
+                Button { store.showLink = true } label: { Image(systemName: "link").frame(width: 24) }
+                    .buttonStyle(QuietButton()).help("Add YouTube video or playlist")
+                    .accessibilityLabel("Add YouTube link")
+            }.padding(.horizontal, 20).padding(.top, 27)
+            HStack {
+                Text("Library").font(.system(size: 12, weight: .medium))
+                Spacer()
+                Text("\(store.jobs.count)").font(.system(size: 12)).monospacedDigit()
+            }.foregroundStyle(Palette.secondary).padding(.horizontal, 24).padding(.top, 30).padding(.bottom, 12)
+            ScrollView {
+                LazyVStack(spacing: 5) {
+                    ForEach(store.jobs) { job in
+                        Button { store.selection = job.id } label: {
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: job.isRemote ? "play.rectangle" : "waveform").font(.system(size: 15)).foregroundStyle(store.selection == job.id ? Palette.green : Palette.secondary).frame(width: 20).padding(.top, 2)
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(job.title).font(.system(size: 13, weight: .medium)).lineLimit(2).multilineTextAlignment(.leading)
+                                    HStack(spacing: 5) {
+                                        if job.status == .completed { Image(systemName: "checkmark").foregroundStyle(Palette.green) }
+                                        Text(job.status.label)
+                                    }.font(.system(size: 11)).foregroundStyle(job.status == .failed ? Color.red : Palette.secondary)
+                                }
+                                Spacer(minLength: 0)
+                            }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                                .background(store.selection == job.id ? Palette.selected : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+                                .contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                            .contextMenu {
+                                if job.status == .failed || job.status == .cancelled { Button("Try again") { store.retry(job.id) } }
+                                Button("Remove from library", role: .destructive) { store.remove(job.id) }.disabled(job.status.isActive)
+                            }
+                    }
+                }.padding(.horizontal, 12)
+                if store.jobs.isEmpty {
+                    Text("Your recordings will appear here.").font(.system(size: 12)).foregroundStyle(Palette.secondary).padding(.horizontal, 24).padding(.top, 8).frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            if store.importing {
+                HStack {
+                    Text("Loading YouTube…").font(.system(size: 12))
+                    Spacer()
+                    Button("Cancel", action: store.cancelImport).buttonStyle(.plain).foregroundStyle(Palette.green)
+                }.padding(20)
+            }
+            VStack(alignment: .leading, spacing: 18) {
+                Button { store.showModels = true } label: {
+                    HStack { Image(systemName: "square.stack.3d.up"); Text("Models"); Spacer(); Text("\(store.downloaded.count)").foregroundStyle(Palette.secondary) }
+                }.buttonStyle(.plain).font(.system(size: 13))
+                HStack(spacing: 7) {
+                    Circle().fill(Palette.green).frame(width: 5, height: 5)
+                    Text("Transcription stays on this Mac").font(.system(size: 10.5)).foregroundStyle(Palette.secondary)
+                }
+            }.padding(24)
+        }.background(Color(white: 0.035))
+    }
+    private var header: some View {
+        HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(store.current?.title ?? "Transcribe").font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                Text(store.current.map { $0.isRemote ? "YouTube" : $0.source.lastPathComponent } ?? "Audio and video, in your own words.")
+                    .font(.system(size: 11)).foregroundStyle(Palette.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            if store.current?.status == .completed {
+                Button(action: store.copyTranscript) { Image(systemName: "doc.on.doc") }.buttonStyle(.plain).help("Copy transcript").accessibilityLabel("Copy transcript")
+                Menu {
+                    Button("Plain text (.txt)") { store.export("txt") }
+                    Button("SubRip subtitles (.srt)") { store.export("srt") }
+                    Button("WebVTT subtitles (.vtt)") { store.export("vtt") }
+                } label: { Label("Export", systemImage: "square.and.arrow.up") }.menuStyle(.borderlessButton).fixedSize()
+            }
+        }.padding(.horizontal, 32).frame(height: 96)
+    }
+    private var emptyState: some View {
+        VStack(spacing: 0) {
+            WaveMark().frame(width: 84, height: 64).padding(.bottom, 27).accessibilityHidden(true)
+            Text("Drop a recording.").font(.system(size: 30, weight: .medium)).tracking(-0.7)
+            Text("Leave with the words.").font(.system(size: 30, weight: .medium)).tracking(-0.7).foregroundStyle(Palette.secondary).padding(.top, 3)
+            Text("Audio, video or a YouTube link.").font(.system(size: 13)).foregroundStyle(Palette.secondary).padding(.top, 20)
+            HStack(spacing: 18) {
+                Button("Choose files", action: store.chooseFiles).buttonStyle(GreenButton())
+                Button("Paste a link") { store.showLink = true }.buttonStyle(.plain).foregroundStyle(Palette.secondary)
+            }.padding(.top, 28)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    @ViewBuilder private func detail(_ job: TranscriptionJob) -> some View {
+        if job.status == .completed {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    HStack {
+                        Text("Transcript").font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.secondary)
+                        Spacer()
+                        Text(job.modelName ?? "Whisper").font(.system(size: 11)).foregroundStyle(Palette.secondary)
+                    }.padding(.bottom, 8)
+                    if job.segments.isEmpty {
+                        Text("No speech was detected in this recording.").foregroundStyle(Palette.secondary)
+                    }
+                    ForEach(job.segments) { segment in
+                        HStack(alignment: .firstTextBaseline, spacing: 22) {
+                            Text(segment.timeLabel).font(.system(size: 11)).monospacedDigit().foregroundStyle(Palette.secondary).frame(width: 44, alignment: .leading)
+                            Text(segment.text).font(.system(size: 16)).lineSpacing(7).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }.padding(36).frame(maxWidth: 900, alignment: .leading).frame(maxWidth: .infinity)
+            }
+        } else {
+            VStack(spacing: 18) {
+                Image(systemName: job.status == .failed ? "exclamationmark.circle" : job.status.isActive ? "waveform" : "doc.text")
+                    .font(.system(size: 35, weight: .ultraLight)).foregroundStyle(job.status == .failed ? .red : Palette.green)
+                Text(job.status.isActive ? store.status : job.status == .queued ? "Ready when you are." : job.status.label)
+                    .font(.system(size: 24, weight: .medium))
+                Text(job.error ?? (job.status == .queued ? "Choose a model and language, then transcribe the queue." : job.status == .cancelled ? "You can queue this recording again." : "You can keep adding recordings while this one is processed."))
+                    .font(.system(size: 13)).foregroundStyle(Palette.secondary).multilineTextAlignment(.center).frame(maxWidth: 390)
+                if job.status == .transcribing {
+                    ProgressView(value: store.progress).frame(width: 240)
+                }
+                if job.status == .failed || job.status == .cancelled {
+                    Button("Queue again") { store.retry(job.id) }.buttonStyle(GreenButton())
+                }
+            }.padding(32).frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+    private var controls: some View {
+        VStack(spacing: 12) {
+            if store.downloadingModel != nil {
+                HStack {
+                    Text(store.status).font(.system(size: 11)).foregroundStyle(Palette.secondary)
+                    ProgressView(value: store.modelProgress).frame(maxWidth: 160)
+                    Text("\(Int(store.modelProgress * 100))%").font(.system(size: 11)).monospacedDigit()
+                    Button("Cancel", action: store.cancelModelDownload).buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Palette.green)
+                }
+            }
+            HStack(spacing: 18) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Model").font(.system(size: 10)).foregroundStyle(Palette.secondary)
+                    Menu {
+                        ForEach(TranscriptionModel.catalog) { model in
+                            Button(model.name + (store.downloaded.contains(model.id) ? "" : " (download)")) { store.selectedModel = model.id }
+                        }
+                    } label: {
+                        HStack { Text(store.model.name); Spacer(); Image(systemName: "chevron.down").font(.system(size: 9)) }
+                    }.menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 112).disabled(store.busy)
+                }
+                Rectangle().fill(Palette.line).frame(width: 1, height: 28)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Language").font(.system(size: 10)).foregroundStyle(Palette.secondary)
+                    Menu {
+                        ForEach(AppStore.languages, id: \.0) { language in
+                            Button(language.1) { store.language = language.0 }
+                        }
+                    } label: {
+                        HStack { Text(AppStore.languages.first { $0.0 == store.language }?.1 ?? "Detect language"); Spacer(); Image(systemName: "chevron.down").font(.system(size: 9)) }
+                    }.menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 135).disabled(store.busy)
+                }
+                Spacer(minLength: 0)
+                if store.busy {
+                    Button(action: store.cancel) { Label("Stop", systemImage: "stop.fill") }.buttonStyle(QuietButton())
+                } else {
+                    Button(action: store.start) {
+                        HStack(spacing: 8) { Text("Transcribe"); if store.queuedCount > 0 { Text("\(store.queuedCount)").opacity(0.6) }; Image(systemName: "arrow.right") }
+                    }.buttonStyle(GreenButton()).disabled(store.queuedCount == 0 || store.downloadingModel != nil)
+                }
+            }.padding(16).modifier(ControlSurface())
+        }
+    }
+    private var diagnostics: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack { Text("Activity").font(.title2); Spacer(); Button("Done") { store.showDiagnostics = false } }
+            ScrollView { Text(store.diagnostics.isEmpty ? "No activity yet." : store.diagnostics).font(.system(size: 11, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
+        }.padding(28).frame(width: 680, height: 460)
+    }
+}
+
+private struct ControlSurface: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(macOS 26, *), !reduceTransparency {
+            content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18))
+        } else {
+            content.background(Color(white: 0.07), in: RoundedRectangle(cornerRadius: 18))
+                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Palette.line))
+        }
+    }
+}
+private struct QuietButton: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.font(.system(size: 12, weight: .medium)).padding(.horizontal, 12).padding(.vertical, 10)
+            .background(Color.white.opacity(configuration.isPressed ? 0.14 : 0.065), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Palette.line))
+    }
+}
+private struct GreenButton: ButtonStyle {
+    @Environment(\.isEnabled) private var enabled
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.font(.system(size: 12, weight: .semibold)).foregroundStyle(enabled ? .black : Palette.secondary)
+            .padding(.horizontal, 18).padding(.vertical, 12)
+            .background(enabled ? Palette.green.opacity(configuration.isPressed ? 0.75 : 1) : Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
+    }
+}
+private struct WaveMark: View {
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(Array([16.0, 30, 48, 64, 38, 22, 12].enumerated()), id: \.offset) { _, height in
+                Capsule().fill(Palette.green).frame(width: 5, height: height)
+            }
+        }
+    }
+}
+
+private struct LinkView: View {
+    @EnvironmentObject private var store: AppStore
+    @State private var link = ""
+    @FocusState private var focused: Bool
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            Text("Add from YouTube").font(.system(size: 24, weight: .medium))
+            Text("Paste a video or playlist link. Audio is downloaded, then transcribed on your Mac.").font(.system(size: 13)).foregroundStyle(Palette.secondary)
+            TextField("https://www.youtube.com/watch?v=…", text: $link).textFieldStyle(.roundedBorder).focused($focused).onSubmit { if MediaInput.youtubeURL(link) != nil { store.addYouTube(link) } }
+            HStack { Spacer(); Button("Cancel") { store.showLink = false }.keyboardShortcut(.cancelAction); Button("Add to queue") { store.addYouTube(link) }.buttonStyle(GreenButton()).disabled(MediaInput.youtubeURL(link) == nil) }
+        }.padding(32).frame(width: 470).onAppear { focused = true }
+    }
+}
+private struct ModelsView: View {
+    @EnvironmentObject private var store: AppStore
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack { Text("Models").font(.system(size: 26, weight: .medium)); Spacer(); Button("Done") { store.showModels = false }.keyboardShortcut(.cancelAction) }.padding(.bottom, 12)
+            Text("Download once. Transcribe offline.").font(.system(size: 13)).foregroundStyle(Palette.secondary).padding(.bottom, 24)
+            ForEach(TranscriptionModel.catalog) { model in
+                HStack(spacing: 20) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(spacing: 8) { Text(model.name).font(.system(size: 14, weight: .semibold)); Text(model.size).font(.system(size: 11)).foregroundStyle(Palette.secondary) }
+                        Text(model.detail).font(.system(size: 12)).foregroundStyle(Palette.secondary)
+                        if store.downloadingModel == model.id {
+                            ProgressView(value: store.modelProgress).frame(width: 260)
+                        }
+                    }
+                    Spacer()
+                    if store.downloadingModel == model.id {
+                        Button("Cancel", action: store.cancelModelDownload).buttonStyle(.plain).foregroundStyle(Palette.green)
+                    } else if store.downloaded.contains(model.id) {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.green).help("Downloaded")
+                        Button { store.deleteModel(model) } label: { Image(systemName: "trash").foregroundStyle(Palette.secondary) }.buttonStyle(.plain).disabled(store.busy || store.downloadingModel != nil).accessibilityLabel("Delete \(model.name)")
+                    } else {
+                        Button { store.downloadModel(model) } label: { Image(systemName: "arrow.down.circle").font(.system(size: 20)) }.buttonStyle(.plain).foregroundStyle(Palette.green).disabled(store.busy || store.downloadingModel != nil).accessibilityLabel("Download \(model.name)")
+                    }
+                }.padding(.vertical, 17)
+                Rectangle().fill(Palette.line).frame(height: 1)
+            }
+            Text("Whisper GGML · Q5 quantization, except Turbo Q8. Downloads are verified before installation.")
+                .font(.system(size: 11)).foregroundStyle(Palette.secondary).padding(.top, 20)
+        }.padding(32).frame(width: 570)
+    }
+}
