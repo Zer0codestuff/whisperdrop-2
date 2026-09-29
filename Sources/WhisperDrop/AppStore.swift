@@ -99,6 +99,15 @@ final class AppStore: ObservableObject {
         if unsupported > 0 { error = "\(unsupported) item(s) could not be added. Choose readable audio or video files." }
         save()
     }
+    /// Inserts a finished note at the top of the library and selects it.
+    func addNote(_ job: TranscriptionJob) {
+        jobs.insert(job, at: 0)
+        selection = job.id
+        save()
+    }
+    func transcriptText(_ job: TranscriptionJob) -> String {
+        job.resolvedKind == .note ? TranscriptOutput.labeledText(job.segments) : job.transcript
+    }
     func addYouTube(_ text: String) {
         guard !importing else { return }
         guard let url = MediaInput.youtubeURL(text) else { error = "Enter a youtube.com or youtu.be video or playlist link."; return }
@@ -253,16 +262,16 @@ final class AppStore: ObservableObject {
     }
     func copyTranscript() {
         guard let job = current else { return }
-        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(job.transcript, forType: .string)
+        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(transcriptText(job), forType: .string)
     }
     func export(_ ext: String) {
         guard let job = current else { return }
+        let text = ext == "txt" ? transcriptText(job) : TranscriptOutput.subtitles(job.segments, vtt: ext == "vtt")
         let panel = NSSavePanel()
         panel.nameFieldStringValue = job.title.replacingOccurrences(of: "/", with: "-") + "." + ext
         panel.allowedContentTypes = ext == "txt" ? [.plainText] : [UTType(filenameExtension: ext, conformingTo: .text) ?? .plainText]
         panel.begin { [weak self] result in
             guard result == .OK, let url = panel.url else { return }
-            let text = ext == "txt" ? job.transcript : TranscriptOutput.subtitles(job.segments, vtt: ext == "vtt")
             do { try text.write(to: url, atomically: true, encoding: .utf8) }
             catch { Task { @MainActor in self?.error = error.localizedDescription } }
         }

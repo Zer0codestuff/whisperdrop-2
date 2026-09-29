@@ -11,19 +11,18 @@ private enum Palette {
 
 struct ContentView: View {
     @EnvironmentObject private var store: AppStore
+    @EnvironmentObject private var recorder: NoteRecorder
+    @EnvironmentObject private var permissions: Permissions
+    @AppStorage("permissionsOnboardingDone") private var onboardingDone = false
     @State private var targeted = false
     var body: some View {
         HStack(spacing: 0) {
             sidebar.frame(width: 262)
             Rectangle().fill(Palette.line).frame(width: 1)
-            VStack(spacing: 0) {
-                header
-                Rectangle().fill(Palette.line).frame(height: 1)
-                ZStack {
-                    Color.black
-                    if let job = store.current { detail(job) } else { emptyState }
-                }
-                controls.padding(.horizontal, 28).padding(.bottom, 24).padding(.top, 12)
+            if LiveNote.isActive(recorder.state) {
+                LiveNoteView()
+            } else {
+                libraryColumn
             }
         }
         .frame(minWidth: 860, minHeight: 580)
@@ -47,6 +46,16 @@ struct ContentView: View {
         .sheet(isPresented: $store.showModels) { ModelsView().environmentObject(store) }
         .sheet(isPresented: $store.showLink) { LinkView().environmentObject(store) }
         .sheet(isPresented: $store.showDiagnostics) { diagnostics }
+        .overlay {
+            if !onboardingDone {
+                ZStack {
+                    Color.black.opacity(0.72)
+                    PermissionsOnboardingView().environmentObject(permissions)
+                        .background(Color.black, in: RoundedRectangle(cornerRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Palette.line))
+                }
+            }
+        }
         .alert("WhisperDrop", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
             Button("OK") { store.error = nil }
         } message: { Text(store.error ?? "") }
@@ -64,6 +73,7 @@ struct ContentView: View {
                     .buttonStyle(QuietButton()).help("Add YouTube video or playlist")
                     .accessibilityLabel("Add YouTube link")
             }.padding(.horizontal, 20).padding(.top, 27)
+            NewNoteButton().padding(.horizontal, 20).padding(.top, 8)
             HStack {
                 Text("Library").font(.system(size: 12, weight: .medium))
                 Spacer()
@@ -74,7 +84,7 @@ struct ContentView: View {
                     ForEach(store.jobs) { job in
                         Button { store.selection = job.id } label: {
                             HStack(alignment: .top, spacing: 10) {
-                                Image(systemName: job.isRemote ? "play.rectangle" : "waveform").font(.system(size: 15)).foregroundStyle(store.selection == job.id ? Palette.green : Palette.secondary).frame(width: 20).padding(.top, 2)
+                                Image(systemName: sidebarSymbol(job)).font(.system(size: 15)).foregroundStyle(store.selection == job.id ? Palette.green : Palette.secondary).frame(width: 20).padding(.top, 2)
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text(job.title).font(.system(size: 13, weight: .medium)).lineLimit(2).multilineTextAlignment(.leading)
                                     HStack(spacing: 5) {
@@ -115,11 +125,29 @@ struct ContentView: View {
             }.padding(24)
         }.background(Color(white: 0.035))
     }
+    private var libraryColumn: some View {
+        VStack(spacing: 0) {
+            header
+            Rectangle().fill(Palette.line).frame(height: 1)
+            ZStack {
+                Color.black
+                if let job = store.current { detail(job) } else { emptyState }
+            }
+            controls.padding(.horizontal, 28).padding(.bottom, 24).padding(.top, 12)
+        }
+    }
+    private func sidebarSymbol(_ job: TranscriptionJob) -> String {
+        switch job.resolvedKind {
+        case .note: "person.2.wave.2"
+        case .youtube: "play.rectangle"
+        case .file: "waveform"
+        }
+    }
     private var header: some View {
         HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 5) {
                 Text(store.current?.title ?? "Transcribe").font(.system(size: 17, weight: .semibold)).lineLimit(1)
-                Text(store.current.map { $0.isRemote ? "YouTube" : $0.source.lastPathComponent } ?? "Audio and video, in your own words.")
+                Text(store.current.map(sourceLabel) ?? "Audio and video, in your own words.")
                     .font(.system(size: 11)).foregroundStyle(Palette.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
@@ -160,6 +188,11 @@ struct ContentView: View {
                     ForEach(job.segments) { segment in
                         HStack(alignment: .firstTextBaseline, spacing: 22) {
                             Text(segment.timeLabel).font(.system(size: 11)).monospacedDigit().foregroundStyle(Palette.secondary).frame(width: 44, alignment: .leading)
+                            if let speaker = segment.speaker {
+                                Text(speaker.label).font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(speaker == .you ? Palette.green : .white)
+                                    .frame(width: 52, alignment: .leading)
+                            }
                             Text(segment.text).font(.system(size: 16)).lineSpacing(7).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
@@ -223,6 +256,13 @@ struct ContentView: View {
                     }.buttonStyle(GreenButton()).disabled(store.queuedCount == 0 || store.downloadingModel != nil)
                 }
             }.padding(16).modifier(ControlSurface())
+        }
+    }
+    private func sourceLabel(_ job: TranscriptionJob) -> String {
+        switch job.resolvedKind {
+        case .note: "Note"
+        case .youtube: "YouTube"
+        case .file: job.source.lastPathComponent
         }
     }
     private var diagnostics: some View {
