@@ -19,6 +19,42 @@ public struct TranscriptionModel: Identifiable, Sendable, Equatable {
     ]
 }
 
+public enum Speaker: String, Codable, Sendable, CaseIterable {
+    case you, others
+    public var label: String { self == .you ? "You" : "Others" }
+}
+
+public enum JobKind: String, Codable, Sendable {
+    case file, youtube, note
+}
+
+/// How long the resident model stays in memory after its last use.
+public enum ModelResidency: String, Codable, Sendable, CaseIterable, Identifiable {
+    case afterUse, twoMinutes, tenMinutes, thirtyMinutes, oneHour, always
+    public var id: String { rawValue }
+    /// Seconds of inactivity before unloading. `nil` keeps the model loaded while the app runs.
+    public var idleSeconds: Double? {
+        switch self {
+        case .afterUse: 0
+        case .twoMinutes: 120
+        case .tenMinutes: 600
+        case .thirtyMinutes: 1800
+        case .oneHour: 3600
+        case .always: nil
+        }
+    }
+    public var label: String {
+        switch self {
+        case .afterUse: "Unload after each use"
+        case .twoMinutes: "After 2 minutes idle"
+        case .tenMinutes: "After 10 minutes idle"
+        case .thirtyMinutes: "After 30 minutes idle"
+        case .oneHour: "After 1 hour idle"
+        case .always: "Keep loaded while the app runs"
+        }
+    }
+}
+
 public enum JobStatus: String, Codable, Sendable {
     case queued, downloading, converting, transcribing, completed, failed, cancelled
     public var label: String { rawValue.capitalized }
@@ -30,8 +66,9 @@ public struct TranscriptSegment: Identifiable, Codable, Sendable {
     public var start: Double
     public var end: Double
     public var text: String
-    public init(id: Int, start: Double, end: Double, text: String) {
-        self.id = id; self.start = start; self.end = end; self.text = text
+    public var speaker: Speaker?
+    public init(id: Int, start: Double, end: Double, text: String, speaker: Speaker? = nil) {
+        self.id = id; self.start = start; self.end = end; self.text = text; self.speaker = speaker
     }
     public var timeLabel: String { String(format: "%02d:%02d", Int(start) / 60, Int(start) % 60) }
 }
@@ -48,6 +85,11 @@ public struct TranscriptionJob: Identifiable, Codable, Sendable {
     public var error: String?
     public var modelName: String?
     public var duration: Double?
+    /// `nil` in libraries saved before notes existed; use `resolvedKind`.
+    public var kind: JobKind?
+    /// Recorded audio kept for notes, if the user chose to keep it.
+    public var audioFile: URL?
+    public var resolvedKind: JobKind { kind ?? (isRemote ? .youtube : .file) }
     public init(source: URL, title: String? = nil, isRemote: Bool = false) {
         id = UUID(); self.source = source
         self.title = title ?? source.deletingPathExtension().lastPathComponent
