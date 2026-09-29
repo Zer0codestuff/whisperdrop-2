@@ -8,6 +8,7 @@ let package = Package(
     targets: [
         .target(name: "WhisperDropCore"),
         .executableTarget(name: "WhisperDrop", dependencies: ["WhisperDropCore"]),
-        .testTarget(name: "WhisperDropCoreTests", dependencies: ["WhisperDropCore"])
+        .testTarget(name: "WhisperDropCoreTests", dependencies: ["WhisperDropCore"]),
+        .testTarget(name: "WhisperDropAppTests", dependencies: ["WhisperDrop"])
     ]
 )

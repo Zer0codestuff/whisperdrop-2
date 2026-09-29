@@ -99,6 +99,15 @@ final class AppStore: ObservableObject {
         if unsupported > 0 { error = "\(unsupported) item(s) could not be added. Choose readable audio or video files." }
         save()
     }
+    /// Inserts a finished note at the top of the library and selects it.
+    func addNote(_ job: TranscriptionJob) {
+        jobs.insert(job, at: 0)
+        selection = job.id
+        save()
+    }
+    func transcriptText(_ job: TranscriptionJob) -> String {
+        job.resolvedKind == .note ? TranscriptOutput.labeledText(job.segments) : job.transcript
+    }
     func addYouTube(_ text: String) {
         guard !importing else { return }
         guard let url = MediaInput.youtubeURL(text) else { error = "Enter a youtube.com or youtu.be video or playlist link."; return }
@@ -226,7 +235,8 @@ final class AppStore: ObservableObject {
         let arguments = ["--model", modelURL.path, "--file", audio.path, "--language", language, "--output-json", "--output-txt", "--output-file", output.path, "--print-progress", "--threads", String(min(6, max(2, ProcessInfo.processInfo.activeProcessorCount - 2))) ]
         var result = try await runner.run(tool("whisper-cli"), arguments) { [weak self] text in
             self?.log(text)
-            if let range = text.range(of: #"progress =\s*\d+"#, options: .regularExpression) {
+            // A chunk can hold several updates; the last one is the current value.
+            if let range = text.ranges(of: #/progress =\s*\d+/#).last {
                 let value = text[range].filter(\.isNumber)
                 self?.progress = min(1, Double(value).map { $0 / 100 } ?? 0)
             }
@@ -252,16 +262,16 @@ final class AppStore: ObservableObject {
     }
     func copyTranscript() {
         guard let job = current else { return }
-        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(job.transcript, forType: .string)
+        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(transcriptText(job), forType: .string)
     }
     func export(_ ext: String) {
         guard let job = current else { return }
+        let text = ext == "txt" ? transcriptText(job) : TranscriptOutput.subtitles(job.segments, vtt: ext == "vtt")
         let panel = NSSavePanel()
         panel.nameFieldStringValue = job.title.replacingOccurrences(of: "/", with: "-") + "." + ext
-        panel.allowedContentTypes = ext == "txt" ? [.plainText] : [UTType(exportedAs: "io.github.zer0codestuff.whisperdrop2.\(ext)", conformingTo: .text)]
+        panel.allowedContentTypes = ext == "txt" ? [.plainText] : [UTType(filenameExtension: ext, conformingTo: .text) ?? .plainText]
         panel.begin { [weak self] result in
             guard result == .OK, let url = panel.url else { return }
-            let text = ext == "txt" ? job.transcript : TranscriptOutput.subtitles(job.segments, vtt: ext == "vtt")
             do { try text.write(to: url, atomically: true, encoding: .utf8) }
             catch { Task { @MainActor in self?.error = error.localizedDescription } }
         }

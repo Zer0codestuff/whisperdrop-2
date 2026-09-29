@@ -11,6 +11,9 @@ WhisperDrop 2 is the second version of **WhisperDrop**, originally started as a 
 - Transcribe on your Mac with whisper.cpp, Metal acceleration and CPU fallback.
 - Download six quantized Whisper models, with SHA-256 verification before use.
 - Read timestamped transcripts, copy text and export TXT, SRT or VTT.
+- Dictate into the app in front by holding the fn key (or another key you choose). Text is typed at the cursor.
+- Record a note from the microphone, from system audio (a call or online meeting), or from both. The transcript builds while you record, with You and Others labeled when both sources are on.
+- Keep the speech model loaded only while you need it. The default unloads it after 10 minutes idle. A menu bar switch can keep it ready.
 - Cancel processing, retry failed recordings and keep completed transcripts across launches.
 - Use native Liquid Glass controls on macOS 26+, with a solid fallback on earlier systems or with Reduce Transparency enabled.
 
@@ -41,9 +44,25 @@ Create a local disk image after checking the app:
 scripts/package-dmg.sh
 ```
 
+## Dictation and notes
+
+Dictation and notes run on this Mac with the model you choose in Settings. Turbo is the default. The first launch asks for Microphone, Accessibility, Input Monitoring and, when you record a call, system audio. You can skip any of them and allow it later in Settings.
+
+Hold fn to dictate. On a Mac, System Settings, Keyboard, set **Press 🌐 key to** to **Do Nothing**. Otherwise macOS also opens the emoji picker or its own Dictation while you hold fn. You can switch the shortcut to Right Option, Right Command or Right Control.
+
+The model stays in memory according to the residency setting (after each use, or after 2, 10, 30 or 60 minutes idle, or for the whole time the app is open). **Keep model ready** in the menu bar overrides that and leaves it loaded. Quitting the app stops the resident `whisper-server` process.
+
+Notes are saved in the library. Speaker lines are copied and exported as "You" and "Others". Recorded audio is kept when **Keep note audio** is on.
+
 ## Installation and Gatekeeper
 
-The current build is **ad hoc signed and not notarized**. It is a development build, not a notarized public release. A downloaded copy may be blocked by Gatekeeper. Rewriting the app does not remove this restriction.
+`scripts/build-app.sh` signs the app with the local identity **WhisperDrop 2 Local** when that certificate is in the keychain, and falls back to an ad hoc signature otherwise. Create the identity with:
+
+```bash
+scripts/setup-local-signing.sh
+```
+
+The build is **not notarized**. It is a development build, not a notarized public release. A downloaded copy may be blocked by Gatekeeper. A local signature does not remove that restriction.
 
 Developer ID signing and Apple notarization require an Apple Developer Program membership. Once available, the bundle and all runtime executables need a distribution signing and notarization pipeline. Do not disable Gatekeeper globally. See [Apple's distribution guidance](https://developer.apple.com/developer-id/).
 
@@ -70,8 +89,10 @@ App data lives in `~/Library/Application Support/WhisperDrop 2/`:
 
 - `Models/`: downloaded model weights.
 - `Transcripts/`: one folder per recording, containing TXT, SRT and VTT output.
+- `Notes/`: one folder per recorded note, with the partial transcript and, when kept, the audio.
 - `history.json`: source locations, queue state and transcripts.
 - `Work/`: temporary audio, removed after processing or cancellation.
+- `whisper-server.pid`: the resident model process, removed when the app quits.
 
 Original files are never overwritten. Export opens a standard save dialog. Removing a recording from the library removes its history entry; exported files and archived transcripts remain on disk. Local source files must remain available until processing finishes. Interrupted jobs return to the queue after relaunch.
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-for tool in whisper-cli ffmpeg yt-dlp deno; do
+for tool in whisper-cli whisper-server ffmpeg yt-dlp deno; do
   [[ -x ".runtime/bin/$tool" ]] || { echo 'Run scripts/prepare-runtime.sh first.' >&2; exit 1; }
 done
 swift build -c release --arch arm64
@@ -21,22 +21,15 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>WhisperDrop 2</string>
 <key>CFBundleDisplayName</key><string>WhisperDrop 2</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>2.0.0</string>
-<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleShortVersionString</key><string>2.1.0</string>
+<key>CFBundleVersion</key><string>2</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
 <key>NSHighResolutionCapable</key><true/>
+<key>NSMicrophoneUsageDescription</key><string>WhisperDrop uses the microphone for dictation and notes. Audio stays on this Mac.</string>
+<key>NSAudioCaptureUsageDescription</key><string>WhisperDrop records audio from other apps for meeting notes. Audio stays on this Mac.</string>
+<key>NSScreenCaptureUsageDescription</key><string>WhisperDrop uses screen capture only to record meeting audio on macOS 14.0 and 14.1. Audio stays on this Mac.</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
-<key>UTExportedTypeDeclarations</key><array>
-<dict><key>UTTypeIdentifier</key><string>io.github.zer0codestuff.whisperdrop2.srt</string>
-<key>UTTypeDescription</key><string>SubRip subtitles</string>
-<key>UTTypeConformsTo</key><array><string>public.text</string></array>
-<key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>srt</string></array><key>public.mime-type</key><string>application/x-subrip</string></dict></dict>
-<dict><key>UTTypeIdentifier</key><string>io.github.zer0codestuff.whisperdrop2.vtt</string>
-<key>UTTypeDescription</key><string>WebVTT subtitles</string>
-<key>UTTypeConformsTo</key><array><string>public.text</string></array>
-<key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>vtt</string></array><key>public.mime-type</key><string>text/vtt</string></dict></dict>
-</array>
 <key>CFBundleDocumentTypes</key><array><dict>
 <key>CFBundleTypeName</key><string>Audio or video</string>
 <key>CFBundleTypeRole</key><string>Viewer</string>
@@ -53,7 +46,16 @@ for size in 16 32 128 256 512; do
   sips -z "$double" "$double" dist/AppIcon.png --out "dist/AppIcon.iconset/icon_${size}x${size}@2x.png" >/dev/null
 done
 iconutil -c icns dist/AppIcon.iconset -o "$app/Contents/Resources/AppIcon.icns"
-for tool in "$app/Contents/Resources/Runtime/bin/"*; do codesign --force --sign - "$tool"; done
-codesign --force --sign - "$app"
-codesign --verify --deep --strict "$app"
+identity='-'
+if [[ -n "${WD_SIGN_IDENTITY:-}" ]]; then
+  identity="$WD_SIGN_IDENTITY"
+elif security find-identity -p codesigning | grep -F '"WhisperDrop 2 Local"' >/dev/null; then
+  identity='WhisperDrop 2 Local'
+fi
+echo "Signing identity: ${identity}"
+for tool in "$app/Contents/Resources/Runtime/bin/"*; do
+  codesign --force --sign "$identity" "$tool"
+done
+codesign --force --sign "$identity" "$app"
+codesign --verify --strict "$app"
 echo "$app"
