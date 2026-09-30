@@ -29,6 +29,7 @@ Native macOS transcription app, rebuilt from the WhisperDrop project started by 
 Version 2.1.1 includes the lecture transcription fixes, visible note language and audio retention. File transcription, YouTube import, dictation and meeting notes are implemented. The resident model defaults to Turbo Q5 and unloads after 10 minutes idle. First launch asks for the privacy permissions dictation and notes need. Repository target is public `Zer0codestuff/whisperdrop-2`.
 
 ## Recent changes and validation
+- README introduces features and installation before technical details, with a native app screenshot at `docs/screenshots/whisperdrop-notes.jpg`. Screenshot content is synthetic and uses an isolated `--data-dir`; never publish the user's library. Keep the GitHub description focused on what users can do.
 - Corrected PCM packet ordering under backlog, removed whisper-server's character wrapping inside words, and preserved real repeated note sentences.
 - Note language and audio retention are visible beside New note. First use reminds the user to check language. Saved notes expose their audio in Finder. Optional note vocabulary is in Settings.
 - Session language, vocabulary and audio retention are frozen at recording start. Capture/write failures and skipped transcription chunks remain visible in the saved note.

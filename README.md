@@ -1,80 +1,58 @@
 # WhisperDrop 2
 
-Local audio and video transcription, rebuilt as a native Mac app.
+Turn recordings, videos and meetings into text, right on your Mac. Record a lecture, transcribe a YouTube playlist, or dictate directly into another app.
 
-WhisperDrop 2 is the second version of **WhisperDrop**, originally started as a project together with [Luca Arisci](https://github.com/LucaArisci). The [original WhisperDrop repository](https://github.com/LucaArisci/whisper-drop), including its [dev branch](https://github.com/LucaArisci/whisper-drop/tree/dev), is where the project began. This version rebuilds the macOS app in SwiftUI while keeping its black, white and green identity and local transcription workflow.
+![WhisperDrop 2 showing a lecture transcript, saved notes and transcription controls](docs/screenshots/whisperdrop-notes.jpg)
 
-## What it does
+*The app with sample lecture content.*
 
-- Add audio and video files with drag and drop or the file picker.
-- Import YouTube videos and playlists into a persistent queue.
-- Transcribe on your Mac with whisper.cpp, Metal acceleration and CPU fallback.
-- Download six quantized Whisper models, with SHA-256 verification before use.
-- Read timestamped transcripts, copy text and export TXT, SRT or VTT.
-- Dictate into the app in front by holding the fn key (or another key you choose). Text is typed at the cursor.
-- Record a note from the microphone, from system audio (a call or online meeting), or from both. The transcript builds while you record, with You and Others labeled when both sources are on.
-- Keep the speech model loaded only while you need it. The default unloads it after 10 minutes idle. A menu bar switch can keep it ready.
-- Cancel processing, retry failed recordings and keep completed transcripts across launches.
-- Use native Liquid Glass controls on macOS 26+, with a solid fallback on earlier systems or with Reduce Transparency enabled.
+[Download the latest version](https://github.com/Zer0codestuff/whisperdrop-2/releases/latest) · Apple Silicon · macOS 14 or later
 
-Transcription never uses a cloud API. Model downloads contact Hugging Face; YouTube imports contact YouTube. Local recordings can be transcribed offline after the chosen model is installed. There are no accounts, analytics or API keys.
+## Features
 
-## Requirements
+- Transcribe audio and video files. Drag them into the app or choose them with the file picker.
+- Import YouTube videos and entire playlists by pasting a link.
+- Record lectures, calls and meetings using your microphone, system audio, or both. The transcript appears as you record.
+- Save notes in your library and optionally keep the original audio. When recording both sources, the transcript labels them as You and Others.
+- Dictate into other apps by holding a shortcut key. The words appear where your cursor is.
+- Choose the spoken language or let the app detect it. Add subject terms and names in Settings to help recognition.
+- Read transcripts with timestamps, copy the text, or export plain text and SRT or VTT subtitles.
+- Queue several recordings, cancel processing, retry failures, and return to saved transcripts later.
+- Choose from six downloadable speech models. Turbo is the default; smaller models use less memory.
+- Process speech locally. After downloading a model, you can transcribe local files, record notes and dictate offline.
 
-- Apple Silicon Mac running macOS 14 or later.
-- Internet access for model downloads and YouTube.
-- To build: Xcode 26 or later, its command-line tools, CMake and a working C/C++ toolchain. The SwiftUI glass API requires the macOS 26 SDK even though the deployment target is macOS 14.
+## Get started
 
-## Build and run
+1. Download the `.dmg` from the [latest release](https://github.com/Zer0codestuff/whisperdrop-2/releases/latest).
+2. Drag **WhisperDrop 2.app** into Applications. If you are updating, quit the old version first and replace it.
+3. Open the app and download a model from **Models**. Start with Turbo.
+4. Add a recording, paste a YouTube link, or choose **New note**.
 
-```bash
-git clone https://github.com/Zer0codestuff/whisperdrop-2.git
-cd whisperdrop-2
-scripts/prepare-runtime.sh
-swift test
-scripts/build-app.sh
-open 'dist/WhisperDrop 2.app'
-```
+Your Mac needs Apple Silicon and macOS 14 or later. Internet access is needed for model downloads and YouTube imports.
 
-Runtime preparation builds pinned whisper.cpp and FFmpeg sources and downloads verified standalone yt-dlp and Deno binaries. The resulting app contains its tools and does not require Python, Homebrew or a terminal at launch. The first build takes several minutes.
+The current release is not notarized by Apple, so macOS may block the first launch. If you trust this build, try opening it once, then go to **System Settings > Privacy & Security > Open Anyway**. See [Apple's instructions](https://support.apple.com/en-us/102445). Updating the app keeps your existing notes, models and settings.
 
-Create a local disk image after checking the app:
+## Notes and dictation
 
-```bash
-scripts/package-dmg.sh
-```
+Before recording a note, set **Note language** beside **New note** to the language being spoken. Use **Keep audio** if you also want to save the recording. You can find kept audio later using the note's audio button.
 
-## Dictation and notes
+For dictation, hold **fn** while speaking and release it to insert the text. Set **System Settings > Keyboard > Press 🌐 key to > Do Nothing** so macOS does not open its emoji picker or Dictation at the same time. You can choose a different shortcut in the app's Settings.
 
-Dictation and notes run on this Mac with the model you choose in Settings. Turbo is the default. The first launch asks for Microphone, Accessibility, Input Monitoring and, when you record a call, system audio. You can skip any of them and allow it later in Settings.
+The app asks for the permissions these features need. You can skip setup and grant them later. Microphone access enables voice capture; Accessibility and Input Monitoring enable dictation; system audio access enables recording calls or other audio playing on your Mac.
 
-Hold fn to dictate. On a Mac, System Settings, Keyboard, set **Press 🌐 key to** to **Do Nothing**. Otherwise macOS also opens the emoji picker or its own Dictation while you hold fn. You can switch the shortcut to Right Option, Right Command or Right Control.
+## Privacy
 
-The model stays in memory according to the residency setting (after each use, or after 2, 10, 30 or 60 minutes idle, or for the whole time the app is open). **Keep model ready** in the menu bar overrides that and leaves it loaded. Quitting the app stops the resident `whisper-server` process.
+Speech is processed on your Mac. There are no accounts, analytics, API keys or cloud transcription services.
 
-Notes are saved in the library. Paragraphs are copied and exported with "You" and "Others" labels when both sources are used. **Note language** and **Keep audio** are visible beside New note. The first recording reminds you to check the spoken language. Kept recordings can be revealed in Finder from the note's audio button.
+Model downloads contact Hugging Face, and YouTube imports contact YouTube. Your notes, transcripts and kept recordings stay on your Mac. Original imported files are never overwritten.
 
-Lecture notes wait for pauses, with a 60-second maximum per request. Forced cuts retain two seconds of audio so boundary words can be completed on the next request. The capture queue preserves audio packet order and reports loss. See [lecture transcription tests](docs/note-transcription.md) for measurements and remaining recognition limits.
+## Technical details
 
-## Installation and Gatekeeper
+### Speech engine and models
 
-`scripts/build-app.sh` signs the app with the local identity **WhisperDrop 2 Local** when that certificate is in the keychain, and falls back to an ad hoc signature otherwise. Create the identity with:
+WhisperDrop 2 is a native SwiftUI app built with Swift Package Manager. It runs whisper.cpp locally with Metal acceleration and CPU fallback. FFmpeg handles media conversion; yt-dlp and Deno handle YouTube imports. These tools are bundled, so the installed app does not need Homebrew, Python or a terminal.
 
-```bash
-scripts/setup-local-signing.sh
-```
-
-The downloadable release is **not notarized** and is signed with a local certificate rather than Developer ID. A downloaded copy may be blocked by Gatekeeper. The message "Apple cannot check the app for malicious software" means Apple cannot verify it. Apple uses a different warning when it detects malware or revoked authorization. A local signature does not remove the verification warning.
-
-To install, quit the previous version, copy **WhisperDrop 2.app** from the disk image to Applications, and replace the old copy. Notes, models and settings are stored outside the app and survive replacement. If Gatekeeper blocks it, try opening it once, then use **System Settings > Privacy & Security > Open Anyway** if you choose to trust this build. Follow [Apple's instructions](https://support.apple.com/en-us/102445). Do not change global security settings or use an installer that disables Gatekeeper.
-
-Locally built apps and apps you have already approved can behave differently from a fresh browser download. The browser's download quarantine and any existing app exception affect the first launch. Repackaging or changing an icon cannot guarantee a different warning on other Macs.
-
-Developer ID signing and Apple notarization require an Apple Developer Program membership. Once available, the bundle and all runtime executables need a distribution signing and notarization pipeline. Do not disable Gatekeeper globally. See [Apple's distribution guidance](https://developer.apple.com/developer-id/).
-
-## Models
-
-The original app uses **GGML**, not GGUF. WhisperDrop 2 keeps the whisper.cpp GGML models. A GGUF file for another model architecture cannot be loaded into whisper.cpp.
+Models use Whisper GGML files, not GGUF. Downloads are checked against their SHA-256 hashes before installation.
 
 | Model | Quantization | Download |
 | --- | --- | ---: |
@@ -85,29 +63,52 @@ The original app uses **GGML**, not GGUF. WhisperDrop 2 keeps the whisper.cpp GG
 | Turbo, default | Q5_0 | 574 MB |
 | Turbo Q8 | Q8_0 | 874 MB |
 
-Sizes are decimal, rounded. Model files come from [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp). A larger model is not automatically better for every recording. Try Tiny or Base when download size and memory matter most.
+Sizes are decimal and rounded. Models come from [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp). Larger models are not always more accurate for a particular recording. [Model research](docs/models.md) covers engines considered for future versions.
 
-See [model research](docs/models.md) for Parakeet and Qwen alternatives. They are research candidates, not selectable engines in this version.
+Dictation and notes share a resident model process. It unloads after 10 minutes idle by default. Settings offer other intervals, and **Keep model ready** in the menu bar keeps it loaded until you turn that off or quit.
 
-## Files and privacy
+Lecture notes wait for pauses, with a 60-second limit per request. Forced cuts retain two seconds of audio to help complete words at the boundary. Read the [lecture transcription tests](docs/note-transcription.md) for measured results and remaining limitations.
+
+### Build and run
+
+Building requires Xcode 26 or later, its command-line tools, CMake and a C/C++ toolchain. The macOS 26 SDK is needed for Liquid Glass controls; the app also runs on earlier supported systems with a solid fallback.
+
+```bash
+git clone https://github.com/Zer0codestuff/whisperdrop-2.git
+cd whisperdrop-2
+scripts/prepare-runtime.sh
+swift test
+scripts/build-app.sh
+open 'dist/WhisperDrop 2.app'
+```
+
+Runtime preparation builds pinned whisper.cpp and FFmpeg sources and downloads verified yt-dlp and Deno binaries. The first build takes several minutes. After checking the app, create a disk image with:
+
+```bash
+scripts/package-dmg.sh
+```
+
+### Local data
 
 App data lives in `~/Library/Application Support/WhisperDrop 2/`:
 
-- `Models/`: downloaded model weights.
-- `Transcripts/`: one folder per recording, containing TXT, SRT and VTT output.
-- `Notes/`: one folder per recorded note, with the partial transcript and, when kept, the audio.
-- `history.json`: source locations, queue state and transcripts.
+- `Models/`: downloaded speech models.
+- `Transcripts/`: TXT, SRT and VTT output for processed files.
+- `Notes/`: note transcripts and audio when kept.
+- `history.json`: library and queue state.
 - `Work/`: temporary audio, removed after processing or cancellation.
-- `whisper-server.pid`: the resident model process, removed when the app quits.
+- `whisper-server.pid`: the resident model process, removed on quit.
 
-Original files are never overwritten. Export opens a standard save dialog. Removing a recording from the library removes its history entry; exported files and archived transcripts remain on disk. Local source files must remain available until processing finishes. Interrupted jobs return to the queue after relaunch.
+Export uses a standard save dialog. Removing a library entry leaves exported files and archived transcripts on disk. Source files must remain available until processing finishes. Interrupted jobs return to the queue after relaunch.
 
-## Development
+### Signing and distribution
 
-The app is a Swift package. Open `Package.swift` in Xcode, or use the build scripts. `WhisperDropCore` holds input validation, model metadata, persisted jobs and subtitle conversion. The SwiftUI executable owns the queue, model downloads and bundled subprocesses.
+The build script uses the local certificate **WhisperDrop 2 Local** when available, or an ad hoc signature otherwise. You can create the local certificate with `scripts/setup-local-signing.sh`. Neither option removes Gatekeeper warnings for downloaded copies.
 
-[AGENTS.md](AGENTS.md) records project constraints. [Lecture transcription tests](docs/note-transcription.md) describe the latest validation. [Third-party notices](docs/third-party.md) cover runtime licenses and binary redistribution requirements.
+The warning that Apple cannot check an app for malicious software means verification is unavailable; it is different from a malware-detection warning. Browser download quarantine and previous approvals also affect launch behavior. Developer ID signing and notarization require an Apple Developer Program membership. See [Apple's distribution guidance](https://developer.apple.com/developer-id/). Do not disable Gatekeeper globally.
 
-## License
+## Project and license
 
-App source: MIT. Runtime components and model weights retain their own licenses.
+WhisperDrop began as a project with [Luca Arisci](https://github.com/LucaArisci). This version rebuilds the [original app](https://github.com/LucaArisci/whisper-drop/tree/dev) for macOS, keeping its black, white and green identity.
+
+[AGENTS.md](AGENTS.md) records project guidance. [Third-party notices](docs/third-party.md) cover bundled runtime licenses. App source is MIT; runtime components and model weights retain their own licenses.
