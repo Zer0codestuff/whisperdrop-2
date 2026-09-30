@@ -66,6 +66,7 @@ final class AppSettings: ObservableObject {
     @Published var noteLanguage: String { didSet { defaults.set(noteLanguage, forKey: "noteLanguage") } }
     @Published var noteVocabulary: String { didSet { defaults.set(noteVocabulary, forKey: "noteVocabulary") } }
     @Published var keepNoteAudio: Bool { didSet { defaults.set(keepNoteAudio, forKey: "keepNoteAudio") } }
+    @Published var automaticAudioBoost: Bool { didSet { defaults.set(automaticAudioBoost, forKey: "automaticAudioBoost") } }
     @Published var showInDock: Bool { didSet { defaults.set(showInDock, forKey: "showInDock") } }
 
     init(defaults: UserDefaults = .standard) {
@@ -86,6 +87,7 @@ final class AppSettings: ObservableObject {
         noteLanguage = defaults.string(forKey: "noteLanguage") ?? "auto"
         noteVocabulary = defaults.string(forKey: "noteVocabulary") ?? ""
         keepNoteAudio = bool("keepNoteAudio", true)
+        automaticAudioBoost = bool("automaticAudioBoost", true)
         showInDock = bool("showInDock", true)
     }
     var model: TranscriptionModel { TranscriptionModel.catalog.first { $0.id == liveModel } ?? TranscriptionModel.catalog[4] }

@@ -86,7 +86,7 @@ struct ContentView: View {
                     .buttonStyle(QuietButton()).help("Add YouTube video or playlist")
                     .accessibilityLabel("Add YouTube link")
             }.padding(.horizontal, 20).padding(.top, 27)
-            NewNoteButton().padding(.horizontal, 20).padding(.top, 8)
+            NewNoteButton().padding(.horizontal, 20).padding(.top, 8).disabled(store.movingSavedFiles)
             HStack {
                 Text("Library").font(.system(size: 12, weight: .medium))
                 Spacer()
@@ -131,6 +131,9 @@ struct ContentView: View {
                 Button { store.showModels = true } label: {
                     HStack { Image(systemName: "square.stack.3d.up"); Text("Models"); Spacer(); Text("\(store.downloaded.count)").foregroundStyle(Palette.secondary) }
                 }.buttonStyle(.plain).font(.system(size: 13))
+                SettingsLink {
+                    HStack { Image(systemName: "gearshape"); Text("Settings"); Spacer() }
+                }.buttonStyle(.plain).font(.system(size: 13)).help("Open settings")
                 HStack(spacing: 7) {
                     Circle().fill(Palette.green).frame(width: 5, height: 5)
                     Text("Transcription stays on this Mac").font(.system(size: 10.5)).foregroundStyle(Palette.secondary)

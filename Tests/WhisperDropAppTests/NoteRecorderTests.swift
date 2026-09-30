@@ -33,6 +33,7 @@ final class NoteRecorderTests: XCTestCase {
         XCTAssertNil(NotePrompt.prompt(previousText: "   ", chunkDuration: 30))
         XCTAssertEqual(NotePrompt.prompt(previousText: "Prior words", chunkDuration: 30, vocabulary: "  Convex set, objective function  "), "Convex set, objective function")
         XCTAssertEqual(NotePrompt.prompt(previousText: "Prior words", chunkDuration: 30, vocabulary: String(repeating: "a", count: 450))?.count, 400)
+        XCTAssertNil(NotePrompt.prompt(previousText: String(repeating: "In operazione di rispetto. ", count: 10), chunkDuration: 60))
         XCTAssertEqual(NoteClock.seconds(.seconds(1) + .milliseconds(500)), 1.5, accuracy: 0.000_001)
     }
 

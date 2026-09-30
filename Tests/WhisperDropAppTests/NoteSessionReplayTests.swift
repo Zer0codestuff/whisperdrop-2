@@ -26,11 +26,13 @@ final class NoteSessionReplayTests: XCTestCase {
         settings.liveModel = env["WHISPERDROP_SESSION_MODEL"] ?? "turbo"
         settings.noteVocabulary = env["WHISPERDROP_SESSION_VOCABULARY"] ?? ""
         settings.keepNoteAudio = env["WHISPERDROP_SESSION_KEEP_AUDIO"] != "0"
+        settings.automaticAudioBoost = env["WHISPERDROP_SESSION_AUDIO_BOOST"] != "0"
         let source = try ReplayCapture(file: URL(fileURLWithPath: input), speed: pace)
         var saved: TranscriptionJob?
         let factory = NoteCaptureFactory(makeMicrophone: { source }, makeSystemTap: { source }, makeWriter: { try AudioFileWriter(url: $0) },
                                          requestMicrophoneAccess: { true }, systemAudioSupported: { true })
-        let recorder = NoteRecorder(settings: settings, host: host, folder: folder, onFinish: { saved = $0 }, captures: factory, defaults: defaults)
+        let recorder = NoteRecorder(settings: settings, host: host, folder: folder, onFinish: { saved = $0 }, captures: factory, defaults: defaults,
+            folderProvider: { (audio: folder.appendingPathComponent("Audio"), transcripts: folder.appendingPathComponent("Transcripts")) })
         defer { if recorder.state != .idle { recorder.finishForTermination() } }
         source.onEnd = { [weak recorder] in Task { @MainActor in recorder?.stop() } }
         let started = Date()
@@ -46,11 +48,21 @@ final class NoteSessionReplayTests: XCTestCase {
         XCTAssertNil(job.error)
         XCTAssertFalse(job.segments.isEmpty)
         XCTAssertEqual(job.duration ?? 0, source.duration / max(0.01, pace), accuracy: 1)
-        let audio = job.source.appendingPathComponent(NoteCopy.microphoneFile)
+        XCTAssertEqual(job.source.deletingLastPathComponent().lastPathComponent, "Transcripts")
+        let audio = folder.appendingPathComponent("Audio/\(job.source.lastPathComponent)/\(NoteCopy.microphoneFile)")
         if settings.keepNoteAudio {
             let file = try AVAudioFile(forReading: audio)
             XCTAssertEqual(file.length, AVAudioFramePosition(source.sampleCount))
             XCTAssertNotNil(job.audioFile)
+            let original = try AVAudioFile(forReading: URL(fileURLWithPath: input))
+            let expected = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: original.processingFormat, frameCapacity: AVAudioFrameCount(original.length)))
+            let actual = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
+            try original.read(into: expected); try file.read(into: actual)
+            let expectedSamples = Array(UnsafeBufferPointer(start: try XCTUnwrap(expected.floatChannelData?[0]), count: Int(expected.frameLength)))
+            let actualSamples = Array(UnsafeBufferPointer(start: try XCTUnwrap(actual.floatChannelData?[0]), count: Int(actual.frameLength)))
+            // CAF PCM16 rounds into 32767; one quantization step is allowed, not an amplified recording.
+            XCTAssertEqual(actualSamples.count, expectedSamples.count)
+            XCTAssertLessThanOrEqual(zip(actualSamples, expectedSamples).map { abs($0 - $1) }.max() ?? 0, 1.0 / 32768)
         } else {
             XCTAssertFalse(FileManager.default.fileExists(atPath: audio.path))
             XCTAssertNil(job.audioFile)

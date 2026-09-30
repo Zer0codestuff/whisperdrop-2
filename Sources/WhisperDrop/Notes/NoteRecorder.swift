@@ -23,10 +23,13 @@ final class NoteRecorder: ObservableObject {
     private var pendingStart: NoteSources?
     private var sessionVocabulary = ""
     private var sessionKeepAudio = true
+    private var sessionAudioBoost = true
 
     private let settings: AppSettings
     private let host: ModelHost
     private let folder: URL
+    private let folderProvider: (() -> (audio: URL, transcripts: URL))?
+    var canStartRecording: () -> Bool = { true }
     private let onFinish: (TranscriptionJob) -> Void
     private let captures: NoteCaptureFactory
     private let defaults: UserDefaults
@@ -51,6 +54,7 @@ final class NoteRecorder: ObservableObject {
     private var microphoneActive = false
     private var systemActive = false
     private var noteFolder: URL?
+    private var noteTranscriptFolder: URL?
     private var lease: UUID?
     private var sessionModel: TranscriptionModel?
     private var startedAt: ContinuousClock.Instant?
@@ -75,10 +79,12 @@ final class NoteRecorder: ObservableObject {
     ///   - onFinish: receives the completed job (kind `.note`, status `.completed`) to add to the library.
     ///   - captures: replaces the real devices in tests. Production uses `.live`.
     init(settings: AppSettings, host: ModelHost, folder: URL, onFinish: @escaping (TranscriptionJob) -> Void,
-         captures: NoteCaptureFactory = .live, defaults: UserDefaults = .standard) {
+         captures: NoteCaptureFactory = .live, defaults: UserDefaults = .standard,
+         folderProvider: (() -> (audio: URL, transcripts: URL))? = nil) {
         self.settings = settings
         self.host = host
         self.folder = folder
+        self.folderProvider = folderProvider
         self.onFinish = onFinish
         self.captures = captures
         self.defaults = defaults
@@ -109,10 +115,11 @@ final class NoteRecorder: ObservableObject {
     }
 
     func start(_ sources: NoteSources) {
-        guard state == .idle else { return }
+        guard state == .idle, canStartRecording() else { return }
         sessionLanguage = settings.noteLanguage
         sessionVocabulary = settings.noteVocabulary
         sessionKeepAudio = settings.keepNoteAudio
+        sessionAudioBoost = settings.automaticAudioBoost
         generation += 1
         let token = generation
         self.sources = sources
@@ -247,9 +254,18 @@ final class NoteRecorder: ObservableObject {
     }
 
     private func makeNoteFolder() throws -> URL {
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let note = folder.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: note, withIntermediateDirectories: true)
+        let roots = folderProvider?() ?? (audio: folder, transcripts: folder)
+        let id = UUID().uuidString
+        let note = roots.audio.appendingPathComponent(id, isDirectory: true)
+        let transcript = roots.transcripts.appendingPathComponent(id, isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: note, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: transcript, withIntermediateDirectories: true)
+        } catch {
+            try? FileManager.default.removeItem(at: note)
+            throw error
+        }
+        noteTranscriptFolder = transcript
         return note
     }
 
@@ -440,7 +456,8 @@ final class NoteRecorder: ObservableObject {
         let samples = item.chunk.samples
         let offset = item.chunk.start
         let task = Task { @MainActor in
-            try await self.transcribeOnce(samples: samples, model: model, language: language, prompt: prompt, offset: offset, speaker: speaker)
+            try Task.checkCancellation()
+            return try await self.transcribeOnce(samples: samples, model: model, language: language, prompt: prompt, offset: offset, speaker: speaker)
         }
         transcribeTask = task
         let result: ServerTranscription
@@ -454,15 +471,16 @@ final class NoteRecorder: ObservableObject {
         }
         transcribeTask = nil
         guard token == generation, !discardRequested else { return }
+        if let message = host.speechCheckWarning { transcriptionWarning = message; publishWarning() }
         segments = transcript.accept(result, stream: item.stream, languageSetting: sessionLanguage, chunk: item.chunk)
     }
 
     private func transcribeOnce(samples: [Float], model: TranscriptionModel, language: String, prompt: String?, offset: Double, speaker: Speaker?) async throws -> ServerTranscription {
         do {
-            return try await host.transcribe(samples, model: model, language: language, prompt: prompt, offset: offset, speaker: speaker)
+            return try await host.transcribe(samples, model: model, language: language, prompt: prompt, offset: offset, speaker: speaker, boostQuietAudio: sessionAudioBoost)
         } catch {
             if Task.isCancelled || error is CancellationError { throw error }
-            return try await host.transcribe(samples, model: model, language: language, prompt: prompt, offset: offset, speaker: speaker)
+            return try await host.transcribe(samples, model: model, language: language, prompt: prompt, offset: offset, speaker: speaker, boostQuietAudio: sessionAudioBoost)
         }
     }
 
@@ -509,6 +527,7 @@ final class NoteRecorder: ObservableObject {
         let folder = noteFolder ?? self.folder
         let job = NoteJobs.make(
             folder: folder,
+            transcriptFolder: noteTranscriptFolder,
             customTitle: title,
             recordedAt: recordedAt,
             segments: segments,
@@ -532,16 +551,22 @@ final class NoteRecorder: ObservableObject {
     }
 
     private func writePartialTranscript() {
-        guard let noteFolder else { return }
-        let url = noteFolder.appendingPathComponent(NoteCopy.partialTranscriptFile)
-        guard let data = try? JSONEncoder().encode(segments) else { return }
-        try? data.write(to: url, options: .atomic)
+        guard let noteTranscriptFolder else { return }
+        let url = noteTranscriptFolder.appendingPathComponent(NoteCopy.partialTranscriptFile)
+        do { try JSONEncoder().encode(segments).write(to: url, options: .atomic) }
+        catch {
+            captureWarning = "The transcript could not be saved to your selected folder. Check access and disk space."
+            publishWarning()
+        }
     }
 
     private func deleteCapturedAudio() {
         guard let noteFolder else { return }
         for name in [NoteCopy.microphoneFile, NoteCopy.systemFile] {
             try? FileManager.default.removeItem(at: noteFolder.appendingPathComponent(name))
+        }
+        if noteFolder != noteTranscriptFolder, (try? FileManager.default.contentsOfDirectory(atPath: noteFolder.path).isEmpty) == true {
+            try? FileManager.default.removeItem(at: noteFolder)
         }
     }
 
@@ -577,6 +602,10 @@ final class NoteRecorder: ObservableObject {
     }
 
     private func removeNoteFolder() {
+        if let noteTranscriptFolder, noteTranscriptFolder != noteFolder {
+            try? FileManager.default.removeItem(at: noteTranscriptFolder)
+        }
+        self.noteTranscriptFolder = nil
         guard let noteFolder else { return }
         try? FileManager.default.removeItem(at: noteFolder)
         self.noteFolder = nil
@@ -617,6 +646,7 @@ final class NoteRecorder: ObservableObject {
         stopRequested = false
         discardRequested = false
         noteFolder = nil
+        noteTranscriptFolder = nil
         micChunker = .lecture
         systemChunker = .lecture
         micPending.clear()

@@ -35,9 +35,13 @@ struct WhisperDropApp: App {
         let recorder = NoteRecorder(
             settings: settings,
             host: host,
-            folder: store.root.appendingPathComponent("Notes", isDirectory: true),
-            onFinish: { store.addNote($0) }, defaults: defaults
+            folder: store.audioFolder,
+            onFinish: { store.addNote($0) }, defaults: defaults,
+            folderProvider: { (audio: store.audioFolder, transcripts: store.outputFolder) }
         )
+        store.canMoveSavedFiles = { [weak recorder] in recorder.map { !LiveNote.isActive($0.state) } ?? true }
+        store.audioBoostEnabled = { [weak settings] in settings?.automaticAudioBoost ?? true }
+        recorder.canStartRecording = { [weak store] in store?.canRecordNotes ?? false }
         _store = StateObject(wrappedValue: store)
         _settings = StateObject(wrappedValue: settings)
         _host = StateObject(wrappedValue: host)
@@ -148,7 +152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return .terminateLater
     }
     private var needsToWait: Bool {
-        let storeBusy = store?.busy == true || store?.importing == true || store?.downloadingModel != nil
+        let storeBusy = store?.busy == true || store?.importing == true || store?.downloadingModel != nil || store?.movingSavedFiles == true
         let noteBusy = recorder.map { LiveNote.isActive($0.state) } ?? false
         return storeBusy || noteBusy
     }

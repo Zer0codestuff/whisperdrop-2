@@ -112,7 +112,9 @@ final class ModelHostTests: XCTestCase {
         try await ready.value
         XCTAssertEqual(host.state, .ready)
         XCTAssertEqual(host.loadedModel, model.id)
+        #if DEBUG
         XCTAssertTrue(host.stateTrace.contains(.loading))
+        #endif
         if Date().timeIntervalSince(loadStarted) >= 3 {
             XCTAssertTrue(sawLoadingAfterThreeSeconds)
         }
@@ -122,7 +124,9 @@ final class ModelHostTests: XCTestCase {
 
         let transcript = try await host.transcribe(samples, model: model, language: "en", shortClip: true)
         XCTAssertFalse(transcript.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #if DEBUG
         XCTAssertTrue(host.stateTrace.contains(.busy))
+        #endif
         XCTAssertEqual(host.state, .ready)
         XCTAssertTrue(isAlive(pid))
 

@@ -90,16 +90,23 @@ scripts/package-dmg.sh
 
 ### Local data
 
-App data lives in `~/Library/Application Support/WhisperDrop 2/`:
+Saved audio and transcripts default to `~/Documents/WhisperDrop/`:
+
+- `Audio/`: original CAF recordings, one subfolder per note when Keep audio is on.
+- `Transcripts/`: TXT, SRT and VTT transcripts, plus the note's recovery JSON.
+
+Open Settings from the main window, then General, Saved files, Choose to select another folder. Existing saved files move with the library. The app verifies copies before removing originals and updates file references together with the destination. Earlier recordings in Application Support migrate automatically.
+
+Private app data stays in `~/Library/Application Support/WhisperDrop 2/`:
 
 - `Models/`: downloaded speech models.
-- `Transcripts/`: TXT, SRT and VTT output for processed files.
-- `Notes/`: note transcripts and audio when kept.
-- `history.json`: library and queue state.
+- `history.json`: library, queue state and saved folder.
 - `Work/`: temporary audio, removed after processing or cancellation.
 - `whisper-server.pid`: the resident model process, removed on quit.
 
-Export uses a standard save dialog. Removing a library entry leaves exported files and archived transcripts on disk. Source files must remain available until processing finishes. Interrupted jobs return to the queue after relaunch.
+Export uses a standard save dialog starting in your Transcripts folder. Removing a library entry leaves exported files and archived transcripts on disk. Source files must remain available until processing finishes. Interrupted jobs return to the queue after relaunch.
+
+Boost quiet audio is on by default for notes and imported files. It applies bounded gain with peak protection when speech is quiet and sufficiently above the noise floor. A local detector limits gain to voice regions. Originals stay unchanged. Short closing phrases such as "Grazie" or "Ciao" are checked against voice activity before they enter the transcript. The detector does not cut lecture speech. Sustained repetition can trigger a fresh attempt without previous text context, with a warning if it remains unresolved. Denoising is not enabled because the tested filters did not consistently improve difficult lecture recordings. See [audio storage and cleanup](docs/audio-storage-and-cleanup.md) for validation and limits.
 
 ### Signing and distribution
 

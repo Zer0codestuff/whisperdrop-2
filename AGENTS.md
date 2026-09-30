@@ -10,6 +10,8 @@ Native macOS transcription app, rebuilt from the WhisperDrop project started by 
 - Notes record microphone and/or system audio, chunk the audio, and transcribe while the note is open. `ModelHost` keeps one model process and unloads it after the idle policy, unless Keep model ready is on.
 - Lecture note chunks have a 60-second limit. Forced cuts retain two seconds of audio and defer the last second of timed words to the next request. Reading paragraphs are independent of subtitle segments.
 - Capture uses a bounded FIFO PCM queue with overflow reporting. File writes run off the capture worker, synchronize about once per second, and drain before closing.
+- Saved files default to `~/Documents/WhisperDrop/Audio` and `Transcripts`. `SavedLibrary` verifies copies, commits the destination and job URLs atomically, then removes originals. General settings can move the managed library to another parent folder. Models and history stay in Application Support. `--data-dir` isolates saved files too.
+- Quiet-audio gain affects inference only. Bundled Silero 6.2.0 checks original voice activity for short closing phrases without cutting lecture audio. Sustained decoder loops get a fresh inference attempt without the previous text context; normal repeated sentences are retained.
 - `WhisperDropCore` holds domain types, chunking, hallucination filtering and transcript merging. The app target owns capture, the model host, dictation, notes, settings and the menu bar. `WhisperDropApp` creates those objects once and injects them into the main window, the menu bar and Settings.
 - Black, white and original green #2bd66b. Spacious transcript view; restrained native glass on macOS 26+.
 - English artifacts and UI. No em dashes. Apply the installed unslop skill to writing.
@@ -26,7 +28,7 @@ Native macOS transcription app, rebuilt from the WhisperDrop project started by 
 - Inspect the running native app and test real transcription before claiming it works.
 
 ## Current status
-Version 2.1.1 includes the lecture transcription fixes, visible note language and audio retention. File transcription, YouTube import, dictation and meeting notes are implemented. The resident model defaults to Turbo Q5 and unloads after 10 minutes idle. First launch asks for the privacy permissions dictation and notes need. Repository target is public `Zer0codestuff/whisperdrop-2`.
+Version 2.2.0, build 4, adds configurable saved folders, a main-window Settings button, quiet-audio preprocessing and checks for invented closing phrases and decoder loops. It retains the lecture transcription fixes, visible note language and audio retention from 2.1.1. File transcription, YouTube import, dictation and meeting notes are implemented. The resident model defaults to Turbo Q5 and unloads after 10 minutes idle. First launch asks for the privacy permissions dictation and notes need. Repository target is public `Zer0codestuff/whisperdrop-2`.
 
 ## Recent changes and validation
 - README introduces features and installation before technical details, with a native app screenshot at `docs/screenshots/whisperdrop-notes.jpg`. Screenshot content is synthetic and uses an isolated `--data-dir`; never publish the user's library. Keep the GitHub description focused on what users can do.
@@ -35,10 +37,13 @@ Version 2.1.1 includes the lecture transcription fixes, visible note language an
 - Session language, vocabulary and audio retention are frozen at recording start. Capture/write failures and skipped transcription chunks remain visible in the saved note.
 - `swift test` passes. The release app builds and its local signature verifies. Silent real-time recording replay preserves every input sample; retention-off replay verifies audio deletion after saving. Native language, retention, paragraph layout and Finder access were checked.
 - The known Italian fixture improved from 26.22% to 2.31% word error rate with Q5. The complete 58-minute saved lecture was replayed with the production chunker. See `docs/note-transcription.md` for methods and limits.
-- Release 2.1.1 uses build number 3. About reads the version from Info.plist. Release downloads remain locally signed and unnotarized; README documents Apple's current Open Anyway flow and distinguishes verification warnings from malware detection.
+- Release 2.2.0 uses build number 4. About reads the version from Info.plist. Release downloads remain locally signed and unnotarized; README documents Apple's current Open Anyway flow and distinguishes verification warnings from malware detection. Release notes are in `docs/releases/v2.2.0.md`.
 - The release DMG was mounted and its nested signatures checked. The packaged binary matched the installed app. Replacement preserved the original history, note audio, transcripts and model files.
 - Private experiments and lesson audio stay under ignored `.experiments/`. Do not infer lecture accuracy from synthetic speech scores. Mathematical symbols and terms still need comparison with an independent reference.
 - Q8 is permitted for experiments; keep Q5 as the default unless a repeatable material improvement is demonstrated. Silence padding, denoising and beam search have not consistently improved the saved lecture.
+- Storage checks cover custom folder changes, collisions, interrupted cleanup, corrupt history and recording-time guards. The real library's four CAF files and four recovery JSON files were moved and verified against their original SHA-256 values. Existing transcript text and models were preserved. Native Settings, folder selection, TXT export, quiet-file import and Finder access were checked. See `docs/audio-storage-and-cleanup.md` for current methods and limits.
+- The update passes 70 standard tests in debug and release. Eight real-model controls, the complete lecture replay, normal-cadence recording replay and retention-off replay passed separately. A 10x-speed capture stress replay dropped one packet and showed the capture warning; do not describe accelerated capture as lossless. The locally signed app is installed, with ignored backups retained. The user approved commit, push to main and release publication on September 30, 2026.
+- Quiet Italian speech and isolated real closing controls are retained, while silence and room-noise closings are filtered. The final 347-word synthetic reference has seven errors, 2.02% word error rate. The September 30 production replay reduces isolated closings from ten to zero; its low signal-to-noise contrast skips gain. It has no independent reference and still contains recognition errors. Plain gain can aggravate decoder repetition, so compare the complete production replay and recovery behavior before judging an improvement. Whisper can itself collapse identical spoken repeats.
 
 ## Do not
 - Change or push to the original repository.
@@ -48,3 +53,7 @@ Version 2.1.1 includes the lecture transcription fixes, visible note language an
 - Replace the original monochrome/green identity or use glass behind transcript text.
 - Publish credentials, local user data, model weights or build artifacts to Git.
 - Play audible test fixtures or change system volume. Use silent file replays for transcription experiments.
+- Move saved audio or transcripts back into Application Support by default.
+- Blacklist ordinary spoken "Grazie" or "Ciao", or trim lecture speech using VAD without repeatable validation.
+- Enable denoising based on a single plausible passage, or claim lecture accuracy from text coherence alone.
+- Publish future updates without the user's authorization.

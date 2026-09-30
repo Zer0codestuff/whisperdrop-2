@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 [[ "$(uname -m)" == arm64 ]] || { echo 'Apple Silicon is required.' >&2; exit 1; }
 command -v cmake >/dev/null || { echo 'Install CMake, then run this script again.' >&2; exit 1; }
-mkdir -p .runtime/{bin,src,licenses}
+mkdir -p .runtime/{bin,src,licenses,models}
 fetch() {
   local url="$1" path="$2" expected="$3"
   if [[ ! -f "$path" ]]; then curl --fail --location --retry 3 "$url" -o "$path.part"; mv "$path.part" "$path"; fi
@@ -26,6 +26,14 @@ if [[ ! -x .runtime/bin/whisper-server ]]; then
   cmake --build .runtime/src/whisper.cpp/build --target whisper-server -j 6
   cp .runtime/src/whisper.cpp/build/bin/whisper-server .runtime/bin/
 fi
+if [[ ! -x .runtime/bin/whisper-vad-speech-segments ]]; then
+  configure_whisper
+  cmake --build .runtime/src/whisper.cpp/build --target whisper-vad-speech-segments -j 6
+  cp .runtime/src/whisper.cpp/build/bin/whisper-vad-speech-segments .runtime/bin/
+fi
+fetch https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin .runtime/models/ggml-silero-v6.2.0.bin 2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987
+fetch https://raw.githubusercontent.com/snakers4/silero-vad/master/LICENSE .runtime/src/silero-license.txt 2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b
+cp .runtime/src/silero-license.txt .runtime/licenses/Silero.txt
 fetch https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz .runtime/src/ffmpeg.tar.xz 464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c
 if [[ ! -d .runtime/src/ffmpeg-8.1.2 ]]; then tar -xf .runtime/src/ffmpeg.tar.xz -C .runtime/src; fi
 if [[ ! -x .runtime/bin/ffmpeg ]]; then

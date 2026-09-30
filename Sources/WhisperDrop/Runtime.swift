@@ -12,7 +12,7 @@ struct CommandResult { let stdout: String; let stderr: String; let status: Int32
 
 @MainActor
 final class CommandRunner {
-    func run(_ executable: URL, _ arguments: [String], progress: ((String) -> Void)? = nil) async throws -> CommandResult {
+    func run(_ executable: URL, _ arguments: [String], timeout: TimeInterval? = nil, progress: ((String) -> Void)? = nil) async throws -> CommandResult {
         try Task.checkCancellation()
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -33,8 +33,10 @@ final class CommandRunner {
         environment["LC_ALL"] = "en_US.UTF-8"
         process.environment = environment
         try process.run()
+        let started = Date()
         do {
             while process.isRunning {
+                if let timeout, Date().timeIntervalSince(started) > timeout { throw AppFailure("The local audio tool took too long to respond.") }
                 try await Task.sleep(for: .milliseconds(150))
                 if let data = try reader.readToEnd(), !data.isEmpty {
                     progress?(String(decoding: data, as: UTF8.self))

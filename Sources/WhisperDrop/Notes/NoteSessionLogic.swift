@@ -109,6 +109,7 @@ enum NotePrompt {
         guard chunkDuration >= minimumDuration else { return nil }
         let terms = vocabulary.trimmingCharacters(in: .whitespacesAndNewlines)
         let value = terms.isEmpty ? tail(previousText) : String(terms.prefix(400))
+        if terms.isEmpty, RepetitionGuard.score(value) > 0 { return nil }
         return value.isEmpty ? nil : value
     }
 }
@@ -198,7 +199,7 @@ struct NoteTranscriptState {
                          chunk: AudioChunk? = nil) -> [TranscriptSegment] {
         let speaker = NoteSpeakers.label(stream: stream, bothLive: labelingSpeakers)
         let committed = stream == .microphone ? micCommittedEnd : systemCommittedEnd
-        let cleaned = HallucinationFilter.clean(result.segments, removeNeighborRepeats: false).compactMap { segment -> TranscriptSegment? in
+        let cleaned = HallucinationFilter.clean(result.segments, removeNeighborRepeats: false, preserveShortClosings: true).compactMap { segment -> TranscriptSegment? in
             let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { return nil }
             var copy = segment
@@ -276,6 +277,7 @@ enum NoteJobs {
 
     static func make(
         folder: URL,
+        transcriptFolder: URL? = nil,
         customTitle: String,
         recordedAt: Date,
         segments: [TranscriptSegment],
@@ -286,7 +288,7 @@ enum NoteJobs {
         transcriptionWarning: String?,
         timeZone: TimeZone = .current
     ) -> TranscriptionJob {
-        var job = TranscriptionJob(source: folder, title: resolvedTitle(customTitle, at: recordedAt, timeZone: timeZone))
+        var job = TranscriptionJob(source: transcriptFolder ?? folder, title: resolvedTitle(customTitle, at: recordedAt, timeZone: timeZone))
         job.kind = .note
         job.status = .completed
         job.created = recordedAt

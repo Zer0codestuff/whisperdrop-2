@@ -21,6 +21,8 @@ final class NoteReplayTests: XCTestCase {
         let language = env["WHISPERDROP_REPLAY_LANGUAGE"] ?? "it"
         let vocabulary = env["WHISPERDROP_REPLAY_VOCABULARY"] ?? ""
         let noContext = env["WHISPERDROP_REPLAY_NO_CONTEXT"] == "1"
+        let audioBoost = env["WHISPERDROP_REPLAY_AUDIO_BOOST"] == "1"
+        let checkSilence = env["WHISPERDROP_REPLAY_SILENCE_CHECK"] != "0"
         let startSeconds = Double(env["WHISPERDROP_REPLAY_START"] ?? "0") ?? 0
         let duration = Double(env["WHISPERDROP_REPLAY_DURATION"] ?? "inf") ?? .infinity
         let host = ModelHost(tool: { root.appendingPathComponent(".runtime/bin/\($0)") },
@@ -66,6 +68,8 @@ final class NoteReplayTests: XCTestCase {
         var pinned: String?
         var requests: [[String: Any]] = []
         var totalInference = 0.0
+        var totalPreprocessing = 0.0
+        var boostedRequests = 0
         var virtualFinish = 0.0
         var maxRSSKB = 0
         for (index, entry) in chunks.enumerated() {
@@ -74,7 +78,10 @@ final class NoteReplayTests: XCTestCase {
             let prompt = NotePrompt.prompt(previousText: noContext ? "" : recent, chunkDuration: chunk.duration, vocabulary: vocabulary)
             let requestLanguage = NoteLanguage.requestCode(setting: language, pinned: legacy ? pinned : state.pinnedLanguage)
             let begin = Date()
-            let result = try await host.transcribe(chunk.samples, model: model, language: requestLanguage, prompt: prompt, offset: chunk.start)
+            let result = try await host.transcribe(chunk.samples, model: model, language: requestLanguage, prompt: prompt, offset: chunk.start, checkSilence: checkSilence, boostQuietAudio: audioBoost)
+            let preprocessingSeconds = host.lastPreprocessingSeconds
+            totalPreprocessing += preprocessingSeconds
+            if host.lastAudioGain > 1 { boostedRequests += 1 }
             let elapsed = Date().timeIntervalSince(begin)
             totalInference += elapsed
             virtualFinish = max(virtualFinish, available) + elapsed
@@ -96,6 +103,8 @@ final class NoteReplayTests: XCTestCase {
             }
             requests.append(["start": chunk.start, "duration": chunk.duration, "stable_until": chunk.stableUntil ?? chunk.start + chunk.duration,
                              "available_at": available, "inference_seconds": elapsed, "response_segments": result.segments.count,
+                             "preprocessing_seconds": preprocessingSeconds, "gain": host.lastAudioGain,
+                             "repetition_retry": host.lastRepetitionRetry,
                              "text": result.text])
             print("Replay \(index + 1)/\(chunks.count), \(model.id), \(String(format: "%.1f", elapsed)) s")
         }
@@ -103,6 +112,9 @@ final class NoteReplayTests: XCTestCase {
         let text = legacy ? segments.map(\.text).joined(separator: "\n") : TranscriptOutput.labeledText(segments)
         let encoded = try JSONEncoder().encode(segments)
         let report: [String: Any] = ["policy": policy, "model": model.id, "language": language,
+                                     "audio_boost": audioBoost, "silence_check": checkSilence,
+                                     "preprocessing_seconds": totalPreprocessing, "boosted_requests": boostedRequests,
+                                     "repetition_retries": requests.filter { $0["repetition_retry"] as? Bool == true }.count,
                                      "vocabulary": vocabulary, "audio_seconds": seconds, "load_seconds": loadSeconds,
                                      "inference_seconds": totalInference, "real_time_factor": totalInference / max(1, seconds),
                                      "simulated_finish_seconds": virtualFinish, "max_post_request_rss_kb": maxRSSKB,

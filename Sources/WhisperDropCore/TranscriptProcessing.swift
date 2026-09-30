@@ -102,10 +102,10 @@ public extension TranscriptOutput {
 
 public enum HallucinationFilter {
     /// Removes known silence hallucinations, empty and bracketed non-speech segments, and runs of repeated text.
-    public static func clean(_ segments: [TranscriptSegment], removeNeighborRepeats: Bool = true) -> [TranscriptSegment] {
+    public static func clean(_ segments: [TranscriptSegment], removeNeighborRepeats: Bool = true, preserveShortClosings: Bool = false) -> [TranscriptSegment] {
         var kept: [TranscriptSegment] = []
         for segment in segments {
-            guard let text = cleanedText(segment.text) else { continue }
+            guard let text = cleanedText(segment.text, preserveShortClosings: preserveShortClosings) else { continue }
             if removeNeighborRepeats, let previous = kept.last,
                neighborRepeat(previous.text, text) {
                 continue
@@ -133,12 +133,12 @@ public enum HallucinationFilter {
         return line.isEmpty ? nil : line
     }
 
-    private static func cleanedText(_ raw: String) -> String? {
+    private static func cleanedText(_ raw: String, preserveShortClosings: Bool) -> String? {
         let text = collapseWhitespace(removingNonSpeechAnnotations(raw))
         guard !text.isEmpty else { return nil }
         let key = normalizedTranscript(text)
         guard !key.isEmpty else { return nil }
-        if matchesExact(key) || containsCredit(key) || isLooped(key) { return nil }
+        if (matchesExact(key) && !(preserveShortClosings && key == "thank you")) || containsCredit(key) || isLooped(key) { return nil }
         return text
     }
 

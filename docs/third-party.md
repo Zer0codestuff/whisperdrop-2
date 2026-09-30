@@ -9,5 +9,6 @@ WhisperDrop 2 starts these tools as separate processes. Their licenses are separ
 | yt-dlp standalone | 2026.08.19 | Unlicense source; bundled executable includes GPLv3+ components | https://github.com/yt-dlp/yt-dlp/tree/2026.08.19 |
 | Deno | 2.9.4 | MIT, with third-party notices in its license file | https://github.com/denoland/deno/tree/v2.9.4 |
 | Whisper model weights | Quantized GGML variants | MIT | https://huggingface.co/ggerganov/whisper.cpp |
+| Silero voice activity model | 6.2.0, GGML | MIT | https://huggingface.co/ggml-org/whisper-vad |
 
-License files are copied into the app's `Contents/Resources/Runtime/licenses` directory. `scripts/prepare-runtime.sh` contains the exact FFmpeg build configuration. No changes are made to FFmpeg sources. Before distributing binary releases, include the corresponding source and license materials required by all bundled components, including yt-dlp's bundled dependencies. This repository currently publishes source; a local DMG is not a notarized public release.
+License files are copied into the app's `Contents/Resources/Runtime/licenses` directory. `scripts/prepare-runtime.sh` contains the exact FFmpeg build configuration. No changes are made to FFmpeg sources. Binary releases must include the corresponding source and license materials required by all bundled components, including yt-dlp's bundled dependencies. Release disk images are locally signed and are not notarized by Apple.

@@ -61,6 +61,10 @@ final class ModelHost: ObservableObject {
     }
 
     private let tool: (String) throws -> URL
+    @Published private(set) var speechCheckWarning: String?
+    private(set) var lastAudioGain: Float = 1
+    private(set) var lastPreprocessingSeconds: Double = 0
+    private(set) var lastRepetitionRetry = false
     private let modelFile: (TranscriptionModel) throws -> URL
     private let processFile: URL
     private let preserveWords: Bool
@@ -135,7 +139,8 @@ final class ModelHost: ObservableObject {
     /// Transcribes 16 kHz mono samples. Requests run one at a time in FIFO order. Resets the idle timer.
     /// `shortClip` (dictation) shrinks the encoder window with `audio_ctx` for clips up to 25 s, which cuts latency about 4x.
     func transcribe(_ samples: [Float], model: TranscriptionModel, language: String, prompt: String? = nil,
-                    offset: Double = 0, speaker: Speaker? = nil, shortClip: Bool = false) async throws -> ServerTranscription {
+                    offset: Double = 0, speaker: Speaker? = nil, shortClip: Bool = false, checkSilence: Bool = true,
+                    boostQuietAudio: Bool = false) async throws -> ServerTranscription {
         if isShutDown { throw AppFailure("WhisperDrop is quitting.") }
         pending += 1
         let cancel = RequestCancel()
@@ -144,7 +149,8 @@ final class ModelHost: ObservableObject {
             self.armIdleTimer()
         }) {
             try await self.perform(samples: samples, model: model, language: language, prompt: prompt,
-                                   offset: offset, speaker: speaker, shortClip: shortClip, cancel: cancel)
+                                   offset: offset, speaker: speaker, shortClip: shortClip, checkSilence: checkSilence,
+                                   boostQuietAudio: boostQuietAudio, cancel: cancel)
         }
         return try await withTaskCancellationHandler {
             try await operation.value
@@ -339,7 +345,8 @@ final class ModelHost: ObservableObject {
     // MARK: - Transcription
 
     private func perform(samples: [Float], model: TranscriptionModel, language: String, prompt: String?,
-                         offset: Double, speaker: Speaker?, shortClip: Bool, cancel: RequestCancel) async throws -> ServerTranscription {
+                         offset: Double, speaker: Speaker?, shortClip: Bool, checkSilence: Bool, boostQuietAudio: Bool,
+                         cancel: RequestCancel) async throws -> ServerTranscription {
         try await loadIfNeeded(model)
         if cancel.isCancelled { throw CancellationError() }
         guard let port, let inferencePath, processIsRunning else {
@@ -353,7 +360,34 @@ final class ModelHost: ObservableObject {
         }
         let duration = Double(samples.count) / Double(whisperSampleRate)
         let context: Int? = shortClip && duration <= 25 ? Self.audioContext(duration: duration) : nil
-        let wav = WAVEncoder.pcm16(samples)
+        speechCheckWarning = nil
+        lastAudioGain = 1
+        lastPreprocessingSeconds = 0
+        lastRepetitionRetry = false
+        let originalWAV = WAVEncoder.pcm16(samples)
+        var wav = originalWAV
+        var speech: [SpeechRange]?
+        if boostQuietAudio {
+            let begin = Date()
+            let prepared = await Task.detached(priority: .userInitiated) { AudioPreprocessor.prepare(samples) }.value
+            lastPreprocessingSeconds = Date().timeIntervalSince(begin)
+            if prepared.gain > 1 {
+                do { speech = try await SpeechActivityDetector.ranges(wav: originalWAV, executable: tool("whisper-vad-speech-segments"), offset: offset) }
+                catch is CancellationError { throw CancellationError() }
+                catch { speechCheckWarning = "The silence check was unavailable. Short closing phrases may need review." }
+                // An empty voice map means room noise. Leave it at its original level.
+                if let speech {
+                    let focusedStarted = Date()
+                    let focused = await Task.detached(priority: .userInitiated) {
+                        AudioPreprocessor.restrict(prepared, original: samples, speech: speech, offset: offset)
+                    }.value
+                    lastPreprocessingSeconds += Date().timeIntervalSince(focusedStarted)
+                    wav = WAVEncoder.pcm16(focused.samples)
+                    lastAudioGain = focused.gain
+                }
+            }
+        }
+        if cancel.isCancelled { throw CancellationError() }
         let data: Data
         do {
             data = try await post(port: port, path: inferencePath, wav: wav, language: language,
@@ -366,11 +400,35 @@ final class ModelHost: ObservableObject {
             }
             throw error
         }
-        do {
-            return try TranscriptOutput.parseServer(data, offset: offset, speaker: speaker)
-        } catch {
+        var result: ServerTranscription
+        do { result = try TranscriptOutput.parseServer(data, offset: offset, speaker: speaker) }
+        catch {
             throw AppFailure("The speech model returned a transcript the app could not read.")
         }
+        if !shortClip, RepetitionGuard.score(result.text) > 0 {
+            lastRepetitionRetry = true
+            do {
+                let retry = try await post(port: port, path: inferencePath, wav: originalWAV, language: language,
+                                           prompt: nil, audioContext: context, cancel: cancel)
+                let candidate = try TranscriptOutput.parseServer(retry, offset: offset, speaker: speaker)
+                if RepetitionGuard.prefers(candidate.text, over: result.text) { result = candidate }
+            } catch is CancellationError { throw CancellationError() }
+            catch { speechCheckWarning = "A repeated passage could not be checked. Review this note's transcript." }
+            if RepetitionGuard.score(result.text) > 0 {
+                speechCheckWarning = "Some passages contain repeated text and need review."
+            }
+        }
+        if checkSilence, !shortClip, SilenceGuard.needsCheck(result.segments) {
+            do {
+                let activity: [SpeechRange]
+                if let speech { activity = speech }
+                else { activity = try await SpeechActivityDetector.ranges(wav: originalWAV, executable: tool("whisper-vad-speech-segments"), offset: offset) }
+                if cancel.isCancelled { throw CancellationError() }
+                result.segments = SilenceGuard.filter(result.segments, speech: activity)
+            } catch is CancellationError { throw CancellationError() }
+            catch { speechCheckWarning = "The silence check was unavailable. Short closing phrases may need review." }
+        }
+        return result
     }
 
     private func post(port: UInt16, path: String, wav: Data, language: String, prompt: String?,

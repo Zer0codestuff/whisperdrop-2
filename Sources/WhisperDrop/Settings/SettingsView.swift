@@ -126,6 +126,8 @@ private struct LanguagePicker: View {
 
 private struct GeneralPane: View {
     @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var store: AppStore
+    @EnvironmentObject private var recorder: NoteRecorder
     @State private var loginEnabled = SMAppService.mainApp.status == .enabled
     @State private var loginStatus = SMAppService.mainApp.status
     @State private var loginError: String?
@@ -149,6 +151,21 @@ private struct GeneralPane: View {
         .onChange(of: settings.showInDock) { _, show in
             NSApp.setActivationPolicy(show ? .regular : .accessory)
             NSApp.activate(ignoringOtherApps: true)
+        }
+        SettingRow(title: "Saved files", detail: "Audio and Transcripts are stored in this folder.") {
+            HStack(spacing: 12) {
+                Button("Show") { NSWorkspace.shared.open(store.savedFolder) }
+                Button("Choose…", action: store.chooseSavedFolder)
+                    .disabled(store.busy || store.importing || store.movingSavedFiles || LiveNote.isActive(recorder.state))
+            }.controlSize(.small)
+        }
+        Text(store.savedFolder.path).font(.system(size: 11)).foregroundStyle(LivePalette.secondary)
+            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true).padding(.bottom, 12)
+        if store.movingSavedFiles {
+            Text("Moving saved files…").font(.system(size: 11)).foregroundStyle(LivePalette.green).padding(.bottom, 12)
+        }
+        SettingRow(title: "Boost quiet audio", detail: "Raises quiet speech in notes and files when background noise is low. Original audio is kept unchanged.") {
+            Switch(isOn: $settings.automaticAudioBoost)
         }
         Rectangle().fill(LivePalette.line).frame(height: 1)
     }
@@ -321,7 +338,7 @@ private struct NotesPane: View {
         SettingRow(title: "Words and names", detail: "Try a short list of subject terms in the spoken language.") {
             TextField("Subject terms", text: $settings.noteVocabulary).textFieldStyle(.roundedBorder).frame(width: 230)
         }
-        SettingRow(title: "Keep the recording", detail: "Saves the audio next to the transcript. When off, it is deleted once the transcript is saved.") {
+        SettingRow(title: "Keep the recording", detail: "Saves the original audio in your Audio folder. When off, it is deleted once the transcript is saved.") {
             Switch(isOn: $settings.keepNoteAudio)
         }
         Rectangle().fill(LivePalette.line).frame(height: 1)
