@@ -247,7 +247,7 @@ final class DictationController: ObservableObject {
         level = 0
         publish(.transcribing)
         let model = settings.model
-        let language = settings.dictationLanguage
+        let language = settings.spokenLanguage
         let vocabulary = settings.vocabulary.trimmingCharacters(in: .whitespacesAndNewlines)
         let prompt = vocabulary.isEmpty ? nil : vocabulary
         let paste = settings.autoPaste
@@ -269,7 +269,7 @@ final class DictationController: ObservableObject {
                     shortClip: true
                 )
                 guard token == self.generation else { return }
-                guard let text = HallucinationFilter.dictationText(transcription) else {
+                guard let text = HallucinationFilter.dictationText(transcription, vocabulary: vocabulary) else {
                     self.quietIdle(token)
                     return
                 }

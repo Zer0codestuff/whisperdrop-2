@@ -162,6 +162,17 @@ final class ModelHostTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: pidFile.path))
         XCTAssertNil(host.serverProcessIdentifier)
     }
+
+    @MainActor func testDictationRequestCanSkipTimestamps() {
+        func fields(_ body: Data) -> String { String(decoding: body, as: UTF8.self) }
+        let plain = fields(ModelHost.multipart(boundary: "b", wav: Data(), language: "it", prompt: nil, audioContext: 512, preserveWords: true))
+        XCTAssertFalse(plain.contains("no_timestamps"))
+        XCTAssertTrue(plain.contains("name=\"temperature\"\r\n\r\n0.0\r\n"))
+        let dictation = fields(ModelHost.multipart(boundary: "b", wav: Data(), language: "it", prompt: nil, audioContext: 512, preserveWords: true,
+                                                   noTimestamps: true, temperature: 0.2))
+        XCTAssertTrue(dictation.contains("name=\"no_timestamps\"\r\n\r\ntrue\r\n"))
+        XCTAssertTrue(dictation.contains("name=\"temperature\"\r\n\r\n0.2\r\n"))
+    }
 }
 
 private func isAlive(_ pid: pid_t) -> Bool {

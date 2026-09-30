@@ -271,4 +271,32 @@ final class ProcessingTests: XCTestCase {
     ) -> TranscriptSegment {
         TranscriptSegment(id: id, start: start, end: end, text: text, speaker: speaker)
     }
+
+    func testDictationJoinLowercasesPauseCapitalsButKeepsNames() {
+        let italian = ServerTranscription(segments: [segment("Vorrei che la guida spiegasse"), segment("Tutte le funzioni in modo semplice."),
+                                                     segment("Poi parlo con"), segment("Luca e con Marco."), segment("E poi Marco risponde")], language: "italian")
+        // A name seen only once, right after a pause, needs the vocabulary to keep its capital.
+        XCTAssertEqual(HallucinationFilter.dictationText(italian),
+                       "Vorrei che la guida spiegasse tutte le funzioni in modo semplice. Poi parlo con luca e con Marco. E poi Marco risponde")
+        XCTAssertEqual(HallucinationFilter.dictationText(italian, vocabulary: "Luca"),
+                       "Vorrei che la guida spiegasse tutte le funzioni in modo semplice. Poi parlo con Luca e con Marco. E poi Marco risponde")
+        XCTAssertEqual(HallucinationFilter.dictationText(ServerTranscription(segments: [segment("I think"), segment("I should go")], language: "english")),
+                       "I think I should go")
+        XCTAssertEqual(HallucinationFilter.dictationText(ServerTranscription(segments: [segment("Ich habe"), segment("Hunger")], language: "german")),
+                       "Ich habe Hunger")
+        XCTAssertEqual(HallucinationFilter.dictationText(ServerTranscription(segments: [segment("Scrivo a"), segment("Gabriele")], language: "italian"), vocabulary: "WhisperDrop, Gabriele"),
+                       "Scrivo a Gabriele")
+        XCTAssertEqual(HallucinationFilter.dictationText(ServerTranscription(segments: [segment("Ho usato la"), segment("NASA API")], language: "italian")),
+                       "Ho usato la NASA API")
+    }
+
+    func testServerSegmentsWithoutTimestampsSpanTheClip() throws {
+        let json = #"{"language":"italian","duration":22.5,"segments":[{"id":0,"text":" Allora, vorrei un'analisi.","words":[{"word":" All","probability":0.9}]}]}"#
+        let result = try TranscriptOutput.parseServer(Data(json.utf8), offset: 2)
+        XCTAssertEqual(result.segments.count, 1)
+        XCTAssertEqual(result.segments[0].start, 2)
+        XCTAssertEqual(result.segments[0].end, 24.5)
+        XCTAssertNil(result.segments[0].words)
+        XCTAssertEqual(HallucinationFilter.dictationText(result), "Allora, vorrei un'analisi.")
+    }
 }

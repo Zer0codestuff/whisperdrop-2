@@ -117,6 +117,7 @@ final class NoteRecorder: ObservableObject {
     func start(_ sources: NoteSources) {
         guard state == .idle, canStartRecording() else { return }
         sessionLanguage = settings.noteLanguage
+        settings.nextNoteLanguage = nil
         sessionVocabulary = settings.noteVocabulary
         sessionKeepAudio = settings.keepNoteAudio
         sessionAudioBoost = settings.automaticAudioBoost

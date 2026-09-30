@@ -54,7 +54,10 @@ final class AppSettings: ObservableObject {
     @Published var autoPaste: Bool { didSet { defaults.set(autoPaste, forKey: "autoPaste") } }
     @Published var restoreClipboard: Bool { didSet { defaults.set(restoreClipboard, forKey: "restoreClipboard") } }
     @Published var sounds: Bool { didSet { defaults.set(sounds, forKey: "sounds") } }
-    @Published var dictationLanguage: String { didSet { defaults.set(dictationLanguage, forKey: "dictationLanguage") } }
+    /// Whisper language code for files, dictation and notes. `auto` asks Whisper to detect it.
+    @Published var spokenLanguage: String { didSet { defaults.set(spokenLanguage, forKey: "spokenLanguage") } }
+    /// Language for the next note only. Cleared when that note starts.
+    @Published var nextNoteLanguage: String?
     /// Model id from `TranscriptionModel.catalog` used by dictation and notes.
     @Published var liveModel: String { didSet { defaults.set(liveModel, forKey: "liveModel") } }
     /// Optional words and names passed to Whisper as a prompt.
@@ -63,7 +66,6 @@ final class AppSettings: ObservableObject {
     /// Menu bar override that keeps the model loaded regardless of `residency`.
     @Published var keepReady: Bool { didSet { defaults.set(keepReady, forKey: "keepReady") } }
     @Published var noteSources: NoteSources { didSet { defaults.set(noteSources.rawValue, forKey: "noteSources") } }
-    @Published var noteLanguage: String { didSet { defaults.set(noteLanguage, forKey: "noteLanguage") } }
     @Published var noteVocabulary: String { didSet { defaults.set(noteVocabulary, forKey: "noteVocabulary") } }
     @Published var keepNoteAudio: Bool { didSet { defaults.set(keepNoteAudio, forKey: "keepNoteAudio") } }
     @Published var automaticAudioBoost: Bool { didSet { defaults.set(automaticAudioBoost, forKey: "automaticAudioBoost") } }
@@ -78,17 +80,31 @@ final class AppSettings: ObservableObject {
         autoPaste = bool("autoPaste", true)
         restoreClipboard = bool("restoreClipboard", true)
         sounds = bool("sounds", true)
-        dictationLanguage = defaults.string(forKey: "dictationLanguage") ?? "auto"
+        spokenLanguage = defaults.string(forKey: "spokenLanguage") ?? Self.initialLanguage(defaults)
         liveModel = defaults.string(forKey: "liveModel") ?? "turbo"
         vocabulary = defaults.string(forKey: "vocabulary") ?? ""
         residency = ModelResidency(rawValue: defaults.string(forKey: "residency") ?? "") ?? .tenMinutes
         keepReady = bool("keepReady", false)
         noteSources = NoteSources(rawValue: defaults.string(forKey: "noteSources") ?? "") ?? .both
-        noteLanguage = defaults.string(forKey: "noteLanguage") ?? "auto"
         noteVocabulary = defaults.string(forKey: "noteVocabulary") ?? ""
         keepNoteAudio = bool("keepNoteAudio", true)
         automaticAudioBoost = bool("automaticAudioBoost", true)
         showInDock = bool("showInDock", true)
+        defaults.set(spokenLanguage, forKey: "spokenLanguage")
     }
     var model: TranscriptionModel { TranscriptionModel.catalog.first { $0.id == liveModel } ?? TranscriptionModel.catalog[4] }
+    var noteLanguage: String { nextNoteLanguage ?? spokenLanguage }
+
+    /// Versions before 2.3 kept separate file, dictation and note languages. The first explicit one wins,
+    /// then the Mac's language when Whisper supports it.
+    static func initialLanguage(_ defaults: UserDefaults, preferred: [String] = Locale.preferredLanguages) -> String {
+        let supported = Set(AppStore.languages.map(\.0)).subtracting(["auto"])
+        for key in ["language", "dictationLanguage", "noteLanguage"] {
+            if let code = defaults.string(forKey: key), supported.contains(code) { return code }
+        }
+        for identifier in preferred {
+            if let code = Locale(identifier: identifier).language.languageCode?.identifier, supported.contains(code) { return code }
+        }
+        return "auto"
+    }
 }

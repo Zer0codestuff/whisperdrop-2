@@ -133,7 +133,10 @@ private struct GeneralPane: View {
     @State private var loginError: String?
     var body: some View {
         PaneHeader(title: "General", subtitle: "How WhisperDrop 2 sits on your Mac.")
-        SettingRow(title: "Launch at login", detail: "Keeps dictation ready from the menu bar after you sign in.", divider: false) {
+        SettingRow(title: "Spoken language", detail: "Used for files, dictation and notes. Detect language guesses from the first seconds and can choose the wrong one.", divider: false) {
+            LanguagePicker(code: $settings.spokenLanguage)
+        }
+        SettingRow(title: "Launch at login", detail: "Keeps dictation ready from the menu bar after you sign in.") {
             Switch(isOn: Binding(get: { loginEnabled }, set: setLogin))
         }
         if loginStatus == .requiresApproval {
@@ -211,7 +214,6 @@ private struct DictationPane: View {
         SettingRow(title: "Sounds", detail: "A short tone when listening starts and ends.") {
             Switch(isOn: $settings.sounds)
         }
-        SettingRow(title: "Language") { LanguagePicker(code: $settings.dictationLanguage) }
         Rectangle().fill(LivePalette.line).frame(height: 1)
         VStack(alignment: .leading, spacing: 8) {
             Text("Vocabulary").font(.system(size: 13))
@@ -334,7 +336,6 @@ private struct NotesPane: View {
                 ForEach(NoteSources.allCases) { Text($0.label).tag($0) }
             }.pickerStyle(.menu).labelsHidden().frame(width: 230)
         }
-        SettingRow(title: "Language") { LanguagePicker(code: $settings.noteLanguage) }
         SettingRow(title: "Words and names", detail: "Try a short list of subject terms in the spoken language.") {
             TextField("Subject terms", text: $settings.noteVocabulary).textFieldStyle(.roundedBorder).frame(width: 230)
         }
@@ -350,7 +351,8 @@ private struct NotesPane: View {
 private struct PermissionsPane: View {
     @EnvironmentObject private var permissions: Permissions
     @EnvironmentObject private var settings: AppSettings
-    @AppStorage("permissionsOnboardingDone") private var onboardingDone = false
+    @AppStorage("guideDone") private var guideDone = false
+    @Environment(\.openWindow) private var openWindow
     private let poll = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
     var body: some View {
         PaneHeader(title: "Permissions", subtitle: "macOS asks once for each. You can change them any time in System Settings.")
@@ -362,7 +364,11 @@ private struct PermissionsPane: View {
         Text("If the shortcut still does nothing after allowing Input Monitoring, quit and reopen WhisperDrop 2.")
             .font(.system(size: 11)).foregroundStyle(LivePalette.secondary).fixedSize(horizontal: false, vertical: true).padding(.top, 14)
         if settings.hotkey == .fn { LiveFnHint().padding(.top, 14) }
-        Button("Show setup again") { onboardingDone = false }.buttonStyle(.plain)
+        Button("Show the guide again") {
+            guideDone = false
+            openWindow(id: "main")
+            NSApp.activate(ignoringOtherApps: true)
+        }.buttonStyle(.plain)
             .font(.system(size: 11, weight: .medium)).foregroundStyle(LivePalette.green).padding(.top, 16)
             .onReceive(poll) { _ in permissions.refresh() }
     }

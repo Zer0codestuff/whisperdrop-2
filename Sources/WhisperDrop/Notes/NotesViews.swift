@@ -153,9 +153,12 @@ struct NewNoteButton: View {
             HStack {
                 Text("Note language").foregroundStyle(LivePalette.secondary)
                 Spacer(minLength: 0)
-                Picker("Note language", selection: $settings.noteLanguage) {
+                Picker("Note language", selection: nextNoteLanguage) {
+                    Text(LiveFormat.language(settings.spokenLanguage) + " (app)").tag("")
+                    Divider()
                     ForEach(AppStore.languages, id: \.0) { Text($0.1).tag($0.0) }
-                }.labelsHidden().frame(maxWidth: 110).disabled(active)
+                }.labelsHidden().frame(maxWidth: 136).disabled(active)
+                .help("Another language for the next note only. The app language is set in Settings, General.")
             }.font(.system(size: 11))
             Menu {
                 ForEach(NoteSources.allCases) { source in
@@ -181,46 +184,7 @@ struct NewNoteButton: View {
                 .disabled(active)
         }
     }
-}
-
-/// Floating onboarding sheet that walks through the permissions the live features need. Reads Permissions from the environment.
-/// Done stores `permissionsOnboardingDone = true` in UserDefaults; Settings, Permissions, "Show setup again" clears it.
-struct PermissionsOnboardingView: View {
-    @EnvironmentObject private var permissions: Permissions
-    @Environment(\.dismiss) private var dismiss
-    @AppStorage("permissionsOnboardingDone") private var onboardingDone = false
-    private let poll = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text("WhisperDrop").font(.system(size: 21, weight: .semibold, design: .rounded))
-                Text("2").font(.system(size: 13, weight: .medium)).foregroundStyle(LivePalette.green)
-            }
-            Text("Dictate into any app, or record a note, on this Mac.").font(.system(size: 24, weight: .medium)).tracking(-0.5)
-                .fixedSize(horizontal: false, vertical: true).padding(.top, 18)
-            Text("macOS asks for a few permissions. Audio and text never leave this Mac. Skip any of them and allow it later in Settings.")
-                .font(.system(size: 13)).foregroundStyle(LivePalette.secondary).fixedSize(horizontal: false, vertical: true).padding(.top, 10).padding(.bottom, 18)
-            ForEach(Array(Permissions.Kind.allCases.enumerated()), id: \.element) { index, kind in
-                if index > 0 { Rectangle().fill(LivePalette.line).frame(height: 1) }
-                LivePermissionRow(kind: kind)
-            }
-            Rectangle().fill(LivePalette.line).frame(height: 1)
-            LiveFnHint().padding(.top, 16)
-            HStack {
-                Text(allSet ? "All set." : "You can change these any time.").font(.system(size: 11)).foregroundStyle(LivePalette.secondary)
-                Spacer()
-                Button("Done") { onboardingDone = true; dismiss() }
-                    .buttonStyle(LiveGreenButton()).keyboardShortcut(.defaultAction)
-            }.padding(.top, 22)
-        }
-        .padding(32).frame(width: 520)
-        .background(Color.black)
-        .preferredColorScheme(.dark)
-        .tint(LivePalette.green)
-        .onAppear { permissions.refresh() }
-        .onReceive(poll) { _ in permissions.refresh() }
-    }
-    private var allSet: Bool {
-        [.microphone, .accessibility, .inputMonitoring].allSatisfy { permissions.status[$0] == .granted }
+    private var nextNoteLanguage: Binding<String> {
+        Binding(get: { settings.nextNoteLanguage ?? "" }, set: { settings.nextNoteLanguage = $0.isEmpty ? nil : $0 })
     }
 }

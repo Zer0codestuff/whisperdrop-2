@@ -10,9 +10,6 @@ final class AppStore: ObservableObject {
     @Published var selectedModel = "turbo" {
         didSet { preferences.set(selectedModel, forKey: "model") }
     }
-    @Published var language = "auto" {
-        didSet { preferences.set(language, forKey: "language") }
-    }
     @Published var busy = false
     @Published var importing = false
     @Published var status = "Ready"
@@ -35,6 +32,7 @@ final class AppStore: ObservableObject {
     let root: URL
     var canMoveSavedFiles: () -> Bool = { true }
     var audioBoostEnabled: () -> Bool = { true }
+    var spokenLanguage: () -> String = { "auto" }
     let modelsFolder: URL
     var outputFolder: URL { savedFolder.appendingPathComponent("Transcripts", isDirectory: true) }
     var audioFolder: URL { savedFolder.appendingPathComponent("Audio", isDirectory: true) }
@@ -80,7 +78,6 @@ final class AppStore: ObservableObject {
             }
         } catch { self.error = "Could not load the library: \(error.localizedDescription)" }
         selectedModel = preferences.string(forKey: "model") ?? "turbo"
-        language = preferences.string(forKey: "language") ?? "auto"
         selection = jobs.first?.id
         refreshModels()
     }
@@ -222,7 +219,7 @@ final class AppStore: ObservableObject {
     func cancelAll() { work?.cancel(); importWork?.cancel(); modelWork?.cancel() }
     func start() {
         guard libraryReadable, !busy, !movingSavedFiles, downloadingModel == nil, queuedCount > 0 else { return }
-        let chosenModel = model, chosenLanguage = language
+        let chosenModel = model, chosenLanguage = spokenLanguage()
         let chosenBoost = audioBoostEnabled()
         let ids = jobs.filter { $0.status == .queued }.map(\.id)
         busy = true; diagnostics = ""; progress = 0

@@ -138,6 +138,7 @@ final class ModelHost: ObservableObject {
 
     /// Transcribes 16 kHz mono samples. Requests run one at a time in FIFO order. Resets the idle timer.
     /// `shortClip` (dictation) shrinks the encoder window with `audio_ctx` for clips up to 25 s, which cuts latency about 4x.
+    /// Dictation that fits one 30 s window is decoded without timestamps, so pauses do not start new capitalized segments.
     func transcribe(_ samples: [Float], model: TranscriptionModel, language: String, prompt: String? = nil,
                     offset: Double = 0, speaker: Speaker? = nil, shortClip: Bool = false, checkSilence: Bool = true,
                     boostQuietAudio: Bool = false) async throws -> ServerTranscription {
@@ -360,6 +361,7 @@ final class ModelHost: ObservableObject {
         }
         let duration = Double(samples.count) / Double(whisperSampleRate)
         let context: Int? = shortClip && duration <= 25 ? Self.audioContext(duration: duration) : nil
+        let oneSegment = shortClip && duration <= 28
         speechCheckWarning = nil
         lastAudioGain = 1
         lastPreprocessingSeconds = 0
@@ -391,7 +393,7 @@ final class ModelHost: ObservableObject {
         let data: Data
         do {
             data = try await post(port: port, path: inferencePath, wav: wav, language: language,
-                                  prompt: prompt, audioContext: context, cancel: cancel)
+                                  prompt: prompt, audioContext: context, noTimestamps: oneSegment, cancel: cancel)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -418,6 +420,19 @@ final class ModelHost: ObservableObject {
                 speechCheckWarning = "Some passages contain repeated text and need review."
             }
         }
+        if shortClip, RepetitionGuard.dictationLoops(result.text) {
+            // A shrunken encoder window is a common cause of loops, so retry with the full window.
+            // Without one to restore, a little sampling temperature breaks the deterministic loop.
+            lastRepetitionRetry = true
+            do {
+                let retry = try await post(port: port, path: inferencePath, wav: originalWAV, language: language, prompt: nil,
+                                           audioContext: nil, noTimestamps: oneSegment, temperature: context == nil ? 0.2 : 0,
+                                           cancel: cancel)
+                let candidate = try TranscriptOutput.parseServer(retry, offset: offset, speaker: speaker)
+                if RepetitionGuard.dictationPrefers(candidate.text, over: result.text) { result = candidate }
+            } catch is CancellationError { throw CancellationError() }
+            catch {}
+        }
         if checkSilence, !shortClip, SilenceGuard.needsCheck(result.segments) {
             do {
                 let activity: [SpeechRange]
@@ -432,7 +447,8 @@ final class ModelHost: ObservableObject {
     }
 
     private func post(port: UInt16, path: String, wav: Data, language: String, prompt: String?,
-                      audioContext: Int?, cancel: RequestCancel) async throws -> Data {
+                      audioContext: Int?, noTimestamps: Bool = false, temperature: Double = 0,
+                      cancel: RequestCancel) async throws -> Data {
         guard let url = Self.endpoint(port: port, path: path) else {
             throw AppFailure("Could not reach the speech model. Try again.")
         }
@@ -443,7 +459,8 @@ final class ModelHost: ObservableObject {
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.httpBody = Self.multipart(boundary: boundary, wav: wav, language: Self.serverLanguage(language),
-                                          prompt: prompt, audioContext: audioContext, preserveWords: preserveWords)
+                                          prompt: prompt, audioContext: audioContext, preserveWords: preserveWords,
+                                          noTimestamps: noTimestamps, temperature: temperature)
         // The caller's Task is not this chain link, so cancellation is delivered through `cancel`.
         return try await withCheckedThrowingContinuation { continuation in
             let task = session.dataTask(with: request) { data, response, error in
@@ -483,7 +500,8 @@ final class ModelHost: ObservableObject {
         return trimmed
     }
 
-    private static func multipart(boundary: String, wav: Data, language: String, prompt: String?, audioContext: Int?, preserveWords: Bool) -> Data {
+    static func multipart(boundary: String, wav: Data, language: String, prompt: String?, audioContext: Int?, preserveWords: Bool,
+                          noTimestamps: Bool = false, temperature: Double = 0) -> Data {
         var body = Data()
         func add(_ string: String) { body.append(Data(string.utf8)) }
         add("--\(boundary)\r\n")
@@ -493,7 +511,7 @@ final class ModelHost: ObservableObject {
         add("\r\n")
         var fields = [
             ("response_format", "verbose_json"),
-            ("temperature", "0.0"),
+            ("temperature", String(format: "%.1f", temperature)),
             ("no_language_probabilities", "true"),
             ("translate", "false"),
             ("language", language)
@@ -502,6 +520,7 @@ final class ModelHost: ObservableObject {
         if preserveWords { fields += [("max_len", "-1"), ("token_timestamps", "true")] }
         if let prompt, !prompt.isEmpty { fields.append(("prompt", prompt)) }
         if let audioContext, audioContext > 0 { fields.append(("audio_ctx", String(audioContext))) }
+        if noTimestamps { fields.append(("no_timestamps", "true")) }
         for (name, value) in fields {
             add("--\(boundary)\r\n")
             add("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n")

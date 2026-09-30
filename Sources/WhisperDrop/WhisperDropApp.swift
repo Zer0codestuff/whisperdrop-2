@@ -41,6 +41,7 @@ struct WhisperDropApp: App {
         )
         store.canMoveSavedFiles = { [weak recorder] in recorder.map { !LiveNote.isActive($0.state) } ?? true }
         store.audioBoostEnabled = { [weak settings] in settings?.automaticAudioBoost ?? true }
+        store.spokenLanguage = { [weak settings] in settings?.spokenLanguage ?? "auto" }
         recorder.canStartRecording = { [weak store] in store?.canRecordNotes ?? false }
         _store = StateObject(wrappedValue: store)
         _settings = StateObject(wrappedValue: settings)
@@ -69,10 +70,11 @@ struct WhisperDropApp: App {
                 Button("Manage models…") { store.showModels = true }.keyboardShortcut("m", modifiers: [.command, .shift])
                 Button("Show activity…") { store.showDiagnostics = true }
             }
+            CommandGroup(replacing: .help) { GuideMenuItem(defaults: appDefaults) }
             CommandGroup(replacing: .appInfo) {
                 Button("About WhisperDrop 2") {
                     let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Development"
-                    NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "WhisperDrop 2", .applicationVersion: version, .credits: NSAttributedString(string: "Local transcription for macOS.\nOriginally started with Luca Arisci.\ngithub.com/LucaArisci/whisper-drop")])
+                    NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "WhisperDrop 2", .applicationVersion: version, .credits: NSAttributedString(string: "Local transcription for macOS.")])
                 }
             }
         }
@@ -114,7 +116,7 @@ struct WhisperDropApp: App {
         let args = ProcessInfo.processInfo.arguments
         guard let i = args.firstIndex(of: "--verify-audio"), args.indices.contains(i + 1) else { return }
         store.selectedModel = "tiny"
-        store.language = "en"
+        store.spokenLanguage = { "en" }
         store.addFiles([URL(fileURLWithPath: args[i + 1])])
         store.start()
         while store.busy { try? await Task.sleep(for: .milliseconds(250)) }

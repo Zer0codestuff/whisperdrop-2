@@ -15,7 +15,7 @@ Turn recordings, videos and meetings into text, right on your Mac. Record a lect
 - Record lectures, calls and meetings using your microphone, system audio, or both. The transcript appears as you record.
 - Save notes in your library and optionally keep the original audio. When recording both sources, the transcript labels them as You and Others.
 - Dictate into other apps by holding a shortcut key. The words appear where your cursor is.
-- Choose the spoken language or let the app detect it. Add subject terms and names in Settings to help recognition.
+- Choose the spoken language once for files, dictation and notes, or let the app detect it. Add subject terms and names in Settings to help recognition.
 - Read transcripts with timestamps, copy the text, or export plain text and SRT or VTT subtitles.
 - Queue several recordings, cancel processing, retry failures, and return to saved transcripts later.
 - Choose from six downloadable speech models. Turbo is the default; smaller models use less memory.
@@ -34,11 +34,11 @@ The current release is not notarized by Apple, so macOS may block the first laun
 
 ## Notes and dictation
 
-Before recording a note, set **Note language** beside **New note** to the language being spoken. Use **Keep audio** if you also want to save the recording. You can find kept audio later using the note's audio button.
+Notes use the app language. To record one note in another language, choose it in **Note language** beside **New note**; the next note uses it once. Use **Keep audio** if you also want to save the recording. You can find kept audio later using the note's audio button.
 
 For dictation, hold **fn** while speaking and release it to insert the text. Set **System Settings > Keyboard > Press 🌐 key to > Do Nothing** so macOS does not open its emoji picker or Dictation at the same time. You can choose a different shortcut in the app's Settings.
 
-The app asks for the permissions these features need. You can skip setup and grant them later. Microphone access enables voice capture; Accessibility and Input Monitoring enable dictation; system audio access enables recording calls or other audio playing on your Mac.
+On first launch a short guide explains each feature and asks for the permissions they need. You can skip it and reopen it from Help. Microphone access enables voice capture; Accessibility and Input Monitoring enable dictation; system audio access enables recording calls or other audio playing on your Mac.
 
 ## Privacy
 

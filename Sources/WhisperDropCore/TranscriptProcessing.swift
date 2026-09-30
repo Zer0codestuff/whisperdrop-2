@@ -18,9 +18,11 @@ public extension TranscriptOutput {
         struct Output: Decodable {
             struct Segment: Decodable {
                 struct Token: Decodable { let word: String; let start: Double?; let end: Double? }
-                let start: Double; let end: Double; let text: String; let words: [Token]?
+                // Absent when the request asked for `no_timestamps`.
+                let start: Double?; let end: Double?; let text: String; let words: [Token]?
             }
             let language: String?
+            let duration: Double?
             let text: String?
             let segments: [Segment]?
         }
@@ -40,7 +42,8 @@ public extension TranscriptOutput {
                     words.append(TranscriptWord(start: start + offset, end: end + offset, text: token.word))
                 }
             }
-            return TranscriptSegment(id: index, start: value.start + offset, end: value.end + offset,
+            let start = value.start ?? 0
+            return TranscriptSegment(id: index, start: start + offset, end: (value.end ?? output.duration ?? start) + offset,
                               text: value.text.trimmingCharacters(in: .whitespacesAndNewlines), speaker: speaker,
                               words: words.isEmpty ? nil : words)
         }.filter { !$0.text.isEmpty }
@@ -121,7 +124,7 @@ public enum HallucinationFilter {
     ///
     /// Dictation audio is already speech-gated before it reaches Whisper, so a real "Thank you." or "Grazie."
     /// is kept. Only bracketed non-speech tags and subtitle credit lines are dropped here.
-    public static func dictationText(_ transcription: ServerTranscription) -> String? {
+    public static func dictationText(_ transcription: ServerTranscription, vocabulary: String = "") -> String? {
         let kept = transcription.segments.compactMap { segment -> String? in
             let text = collapseWhitespace(removingNonSpeechAnnotations(segment.text))
             let key = normalizedTranscript(text)
@@ -129,8 +132,42 @@ public enum HallucinationFilter {
             if key.count <= 160, dictationCreditMarkers.contains(where: { key.contains($0) }) { return nil }
             return text
         }
-        let line = collapseWhitespace(kept.joined(separator: " "))
+        let line = collapseWhitespace(joinDictation(kept, language: transcription.language, vocabulary: vocabulary))
         return line.isEmpty ? nil : line
+    }
+
+    /// Whisper often capitalizes a segment that starts after a pause in the middle of a sentence.
+    /// Lowercases that first word only when the previous segment did not end a sentence and nothing marks it as a name:
+    /// not in the vocabulary, not capitalized elsewhere mid-sentence, not English "I", not German.
+    static func joinDictation(_ parts: [String], language: String?, vocabulary: String = "") -> String {
+        guard parts.count > 1, !["german", "de", "luxembourgish", "lb"].contains(language?.lowercased() ?? "") else {
+            return parts.joined(separator: " ")
+        }
+        let names = Set(vocabulary.split { !$0.isLetter && !$0.isNumber && $0 != "'" }.map { $0.lowercased() })
+        let midSentence = Set(parts.flatMap { part -> [String] in
+            let words = part.split(separator: " ").map(String.init)
+            return zip(words, words.dropFirst()).compactMap { previous, word in
+                previous.last.map(endsSentence) == true ? nil : firstWord(word)
+            }.filter { $0.first?.isUppercase == true }
+        })
+        var result = parts[0]
+        for part in parts.dropFirst() {
+            var next = part
+            if let last = result.last, !endsSentence(last), let word = firstWord(part), let first = word.first,
+               first.isUppercase, word.dropFirst().allSatisfy({ !$0.isUppercase }),
+               word != "I", !word.hasPrefix("I'"), !names.contains(word.lowercased()), !midSentence.contains(word) {
+                next = first.lowercased() + part.dropFirst()
+            }
+            result += " " + next
+        }
+        return result
+    }
+
+    private static func endsSentence(_ character: Character) -> Bool { ".!?…:;\"»”)".contains(character) }
+
+    private static func firstWord(_ text: String) -> String? {
+        let word = text.prefix { $0.isLetter || $0 == "'" || $0 == "’" }
+        return word.isEmpty ? nil : String(word)
     }
 
     private static func cleanedText(_ raw: String, preserveShortClosings: Bool) -> String? {

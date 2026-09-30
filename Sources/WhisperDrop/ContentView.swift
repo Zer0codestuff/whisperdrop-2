@@ -14,7 +14,7 @@ struct ContentView: View {
     @EnvironmentObject private var recorder: NoteRecorder
     @EnvironmentObject private var permissions: Permissions
     @EnvironmentObject private var settings: AppSettings
-    @AppStorage("permissionsOnboardingDone") private var onboardingDone = false
+    @AppStorage("guideDone") private var guideDone = false
     @State private var targeted = false
     var body: some View {
         HStack(spacing: 0) {
@@ -54,10 +54,10 @@ struct ContentView: View {
         .sheet(isPresented: $store.showLink) { LinkView().environmentObject(store) }
         .sheet(isPresented: $store.showDiagnostics) { diagnostics }
         .overlay {
-            if !onboardingDone {
+            if !guideDone {
                 ZStack {
                     Color.black.opacity(0.72)
-                    PermissionsOnboardingView().environmentObject(permissions)
+                    GuideView()
                         .background(Color.black, in: RoundedRectangle(cornerRadius: 16))
                         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Palette.line))
                 }
@@ -70,7 +70,7 @@ struct ContentView: View {
             Button("Start recording") { recorder.confirmStart() }
             Button("Cancel", role: .cancel) { recorder.cancelStart() }
         } message: {
-            Text("Selected: \(NoteLanguage.label(settings.noteLanguage)). Before recording, choose the language spoken in the lesson or meeting. You can change it next to New note.")
+            Text("Language for this note: \(NoteLanguage.label(settings.noteLanguage)). If the lesson or meeting is in another language, choose it next to New note. That choice applies to this note only.")
         }
     }
     private var sidebar: some View {
@@ -184,7 +184,7 @@ struct ContentView: View {
     }
     private var emptyState: some View {
         VStack(spacing: 0) {
-            WaveMark().frame(width: 84, height: 64).padding(.bottom, 27).accessibilityHidden(true)
+            LiveWaveMark().frame(width: 84, height: 64).padding(.bottom, 27).accessibilityHidden(true)
             Text("Drop a recording.").font(.system(size: 30, weight: .medium)).tracking(-0.7)
             Text("Leave with the words.").font(.system(size: 30, weight: .medium)).tracking(-0.7).foregroundStyle(Palette.secondary).padding(.top, 3)
             Text("Audio, video or a YouTube link.").font(.system(size: 13)).foregroundStyle(Palette.secondary).padding(.top, 20)
@@ -265,11 +265,12 @@ struct ContentView: View {
                     Text("Language").font(.system(size: 10)).foregroundStyle(Palette.secondary)
                     Menu {
                         ForEach(AppStore.languages, id: \.0) { language in
-                            Button(language.1) { store.language = language.0 }
+                            Button(language.1) { settings.spokenLanguage = language.0 }
                         }
                     } label: {
-                        HStack { Text(AppStore.languages.first { $0.0 == store.language }?.1 ?? "Detect language"); Spacer(); Image(systemName: "chevron.down").font(.system(size: 9)) }
+                        HStack { Text(LiveFormat.language(settings.spokenLanguage)); Spacer(); Image(systemName: "chevron.down").font(.system(size: 9)) }
                     }.menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 135).disabled(store.busy)
+                    .help("The language you speak. Used for files, dictation and notes.")
                 }
                 Spacer(minLength: 0)
                 if store.busy {
@@ -321,15 +322,6 @@ private struct GreenButton: ButtonStyle {
         configuration.label.font(.system(size: 12, weight: .semibold)).foregroundStyle(enabled ? .black : Palette.secondary)
             .padding(.horizontal, 18).padding(.vertical, 12)
             .background(enabled ? Palette.green.opacity(configuration.isPressed ? 0.75 : 1) : Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
-    }
-}
-private struct WaveMark: View {
-    var body: some View {
-        HStack(spacing: 6) {
-            ForEach(Array([16.0, 30, 48, 64, 38, 22, 12].enumerated()), id: \.offset) { _, height in
-                Capsule().fill(Palette.green).frame(width: 5, height: height)
-            }
-        }
     }
 }
 

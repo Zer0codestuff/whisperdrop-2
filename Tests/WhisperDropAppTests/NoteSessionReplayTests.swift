@@ -22,7 +22,7 @@ final class NoteSessionReplayTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let settings = AppSettings(defaults: defaults)
-        settings.noteLanguage = env["WHISPERDROP_SESSION_LANGUAGE"] ?? "it"
+        settings.spokenLanguage = env["WHISPERDROP_SESSION_LANGUAGE"] ?? "it"
         settings.liveModel = env["WHISPERDROP_SESSION_MODEL"] ?? "turbo"
         settings.noteVocabulary = env["WHISPERDROP_SESSION_VOCABULARY"] ?? ""
         settings.keepNoteAudio = env["WHISPERDROP_SESSION_KEEP_AUDIO"] != "0"

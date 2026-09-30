@@ -46,6 +46,18 @@ struct LiveControlSurface: ViewModifier {
     }
 }
 
+/// Static green waveform used on empty screens and in the guide.
+struct LiveWaveMark: View {
+    var scale: CGFloat = 1
+    var body: some View {
+        HStack(spacing: 6 * scale) {
+            ForEach(Array([16.0, 30, 48, 64, 38, 22, 12].enumerated()), id: \.offset) { _, height in
+                Capsule().fill(LivePalette.green).frame(width: 5 * scale, height: height * scale)
+            }
+        }
+    }
+}
+
 /// Five green capsules driven by a 0...1 level.
 struct LiveLevelBars: View {
     var level: Float

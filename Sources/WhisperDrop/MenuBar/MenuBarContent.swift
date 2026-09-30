@@ -21,6 +21,14 @@ struct MenuBarContent: View {
                 Spacer()
                 Toggle("", isOn: $settings.keepReady).toggleStyle(.switch).controlSize(.mini).labelsHidden()
             }.padding(.horizontal, 10).padding(.vertical, 4)
+            HStack {
+                Text("Language").font(.system(size: 13))
+                Spacer()
+                Picker("Language", selection: $settings.spokenLanguage) {
+                    ForEach(AppStore.languages, id: \.0) { Text($0.1).tag($0.0) }
+                }.labelsHidden().controlSize(.small).fixedSize()
+            }.padding(.horizontal, 10).padding(.vertical, 4)
+            .help("The language you speak. Used for files, dictation and notes.")
             separator
             dictationRows
             separator
@@ -111,9 +119,10 @@ struct MenuBarContent: View {
     @ViewBuilder private var newNoteRows: some View {
         Text("New note").font(.system(size: 11, weight: .medium)).foregroundStyle(LivePalette.secondary)
             .padding(.horizontal, 10).padding(.top, 2).padding(.bottom, 4)
-        Picker("Note language", selection: $settings.noteLanguage) {
-            ForEach(AppStore.languages, id: \.0) { Text($0.1).tag($0.0) }
-        }.font(.system(size: 11)).padding(.horizontal, 10)
+        if let language = settings.nextNoteLanguage {
+            Text("Next note: \(LiveFormat.language(language))").font(.system(size: 11)).foregroundStyle(LivePalette.green)
+                .padding(.horizontal, 10).padding(.bottom, 2)
+        }
         ForEach(NoteSources.allCases) { source in
             Button { LiveNote.start(recorder, source); openMain() } label: {
                 MenuRowLabel(title: source.label, subtitle: source == settings.noteSources ? "Default" : nil, symbol: LiveNote.symbol(source))
