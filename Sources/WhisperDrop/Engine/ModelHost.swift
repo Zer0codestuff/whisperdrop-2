@@ -2,8 +2,8 @@ import Foundation
 import Darwin
 import WhisperDropCore
 
-/// Contract file. Keeps one whisper-server child process loaded with the live model,
-/// serializes requests and unloads it after the idle policy expires.
+/// Contract file. Keeps one model server child process (whisper-server or parakeet-server) loaded
+/// with the live model, serializes requests and unloads it after the idle policy expires.
 @MainActor
 final class ModelHost: ObservableObject {
     enum State: Equatable {
@@ -41,13 +41,6 @@ final class ModelHost: ObservableObject {
     /// State changes since launch, for tests.
     private(set) var stateTrace: [State] = []
     #endif
-
-    /// Encoder frames for a short clip: min(1500, ceil to a multiple of 64 of duration * 50 + 160).
-    static func audioContext(duration: Double) -> Int {
-        let frames = duration * 50 + 160
-        let steps = Int(((frames - 1e-6) / 64).rounded(.up))
-        return min(1500, max(0, steps) * 64)
-    }
 
     static var pidFileURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -107,7 +100,7 @@ final class ModelHost: ObservableObject {
 
     deinit {
         let pid = livePID
-        guard pid > 0, Self.commandName(pid) == "whisper-server" else { return }
+        guard pid > 0, Self.isModelServer(pid) else { return }
         kill(pid, SIGKILL)
     }
 
@@ -143,6 +136,9 @@ final class ModelHost: ObservableObject {
                     offset: Double = 0, speaker: Speaker? = nil, shortClip: Bool = false, checkSilence: Bool = true,
                     boostQuietAudio: Bool = false) async throws -> ServerTranscription {
         if isShutDown { throw AppFailure("WhisperDrop is quitting.") }
+        guard model.supports(language: language) else {
+            throw AppFailure("\(model.name) does not transcribe \(LiveFormat.language(language)). Choose a Whisper model in Settings.")
+        }
         pending += 1
         let cancel = RequestCancel()
         let operation = schedule(finally: {
@@ -233,12 +229,12 @@ final class ModelHost: ObservableObject {
 
     private func startServer(model: TranscriptionModel, file: URL) async throws {
         if isShutDown { throw CancellationError() }
-        let executable = try tool("whisper-server")
+        let executable = try tool(model.engine.serverName)
         let reserved = try Self.reserveLoopbackPort()
         let secret = "/" + UUID().uuidString + "/inference"
         let launched = Process()
         launched.executableURL = executable
-        launched.arguments = Self.arguments(modelPath: file.path, port: reserved, inferencePath: secret)
+        launched.arguments = Self.arguments(engine: model.engine, modelPath: file.path, port: reserved, inferencePath: secret)
         launched.standardInput = FileHandle.nullDevice
         launched.standardOutput = FileHandle.nullDevice
         let pipe = Pipe()
@@ -360,7 +356,8 @@ final class ModelHost: ObservableObject {
             }
         }
         let duration = Double(samples.count) / Double(whisperSampleRate)
-        let context: Int? = shortClip && duration <= 25 ? Self.audioContext(duration: duration) : nil
+        // Shortened encoder windows produced unrelated words and duplicated sentences on real short clips.
+        // Leave audio_ctx unset, including dictation, so Whisper uses its full encoder window.
         let oneSegment = shortClip && duration <= 28
         speechCheckWarning = nil
         lastAudioGain = 1
@@ -393,7 +390,7 @@ final class ModelHost: ObservableObject {
         let data: Data
         do {
             data = try await post(port: port, path: inferencePath, wav: wav, language: language,
-                                  prompt: prompt, audioContext: context, noTimestamps: oneSegment, cancel: cancel)
+                                  prompt: prompt, audioContext: nil, noTimestamps: oneSegment, cancel: cancel)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -407,11 +404,13 @@ final class ModelHost: ObservableObject {
         catch {
             throw AppFailure("The speech model returned a transcript the app could not read.")
         }
-        if !shortClip, RepetitionGuard.score(result.text) > 0 {
+        // Greedy transducer decoding is deterministic, so Whisper's retries would only repeat the same answer.
+        let retries = model.engine == .whisper
+        if retries, !shortClip, RepetitionGuard.score(result.text) > 0 {
             lastRepetitionRetry = true
             do {
                 let retry = try await post(port: port, path: inferencePath, wav: originalWAV, language: language,
-                                           prompt: nil, audioContext: context, cancel: cancel)
+                                           prompt: nil, audioContext: nil, cancel: cancel)
                 let candidate = try TranscriptOutput.parseServer(retry, offset: offset, speaker: speaker)
                 if RepetitionGuard.prefers(candidate.text, over: result.text) { result = candidate }
             } catch is CancellationError { throw CancellationError() }
@@ -420,13 +419,12 @@ final class ModelHost: ObservableObject {
                 speechCheckWarning = "Some passages contain repeated text and need review."
             }
         }
-        if shortClip, RepetitionGuard.dictationLoops(result.text) {
-            // A shrunken encoder window is a common cause of loops, so retry with the full window.
-            // Without one to restore, a little sampling temperature breaks the deterministic loop.
+        if retries, shortClip, RepetitionGuard.dictationLoops(result.text) {
+            // The full encoder window is already in use. A little sampling temperature can break a decoder loop.
             lastRepetitionRetry = true
             do {
                 let retry = try await post(port: port, path: inferencePath, wav: originalWAV, language: language, prompt: nil,
-                                           audioContext: nil, noTimestamps: oneSegment, temperature: context == nil ? 0.2 : 0,
+                                           audioContext: nil, noTimestamps: oneSegment, temperature: 0.2,
                                            cancel: cancel)
                 let candidate = try TranscriptOutput.parseServer(retry, offset: offset, speaker: speaker)
                 if RepetitionGuard.dictationPrefers(candidate.text, over: result.text) { result = candidate }
@@ -626,7 +624,10 @@ final class ModelHost: ObservableObject {
         return "The speech model stopped while loading. \(detail)"
     }
 
-    private static func arguments(modelPath: String, port: UInt16, inferencePath: String) -> [String] {
+    private static func arguments(engine: SpeechEngine, modelPath: String, port: UInt16, inferencePath: String) -> [String] {
+        if engine == .parakeet {
+            return ["--host", "127.0.0.1", "--port", String(port), "--model", modelPath, "--inference-path", inferencePath]
+        }
         let cores = ProcessInfo.processInfo.activeProcessorCount
         let threads = min(6, max(2, cores - 2))
         return ["--host", "127.0.0.1", "--port", String(port), "-m", modelPath,
@@ -704,7 +705,7 @@ final class ModelHost: ObservableObject {
         let parts = text.split(whereSeparator: \.isWhitespace).map(String.init)
         defer { try? FileManager.default.removeItem(at: url) }
         guard parts.count >= 2, parts[1] == Self.pidMarker, let pid = pid_t(parts[0]), pid > 0 else { return }
-        guard Self.commandName(pid) == "whisper-server" else { return }
+        guard Self.isModelServer(pid) else { return }
         Self.terminate(pid)
     }
 
@@ -748,6 +749,10 @@ final class ModelHost: ObservableObject {
         if reaped == pid { return false }
         if reaped == 0 { return true }
         return kill(pid, 0) == 0
+    }
+
+    nonisolated private static func isModelServer(_ pid: pid_t) -> Bool {
+        [SpeechEngine.whisper.serverName, SpeechEngine.parakeet.serverName].contains(commandName(pid) ?? "")
     }
 
     nonisolated private static func commandName(_ pid: pid_t) -> String? {

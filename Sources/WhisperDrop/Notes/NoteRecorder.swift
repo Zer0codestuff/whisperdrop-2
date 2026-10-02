@@ -20,6 +20,13 @@ final class NoteRecorder: ObservableObject {
     @Published private(set) var warning: String?
     @Published var showLanguageReminder = false
     @Published private(set) var sessionLanguage = "auto"
+    /// Words heard after the last transcribed chunk. Removed as chunks covering them are transcribed.
+    @Published private(set) var livePreview: [NoteLivePreview] = []
+    private var previewTask: Task<Void, Never>?
+    private var lastPreview: ContinuousClock.Instant?
+    private var liveText: [NoteStream: LiveText] = [:]
+    /// End of the audio each stream's transcribed chunks cover, in recording seconds.
+    private var coveredUntil: [NoteStream: Double] = [:]
     private var pendingStart: NoteSources?
     private var sessionVocabulary = ""
     private var sessionKeepAudio = true
@@ -30,6 +37,8 @@ final class NoteRecorder: ObservableObject {
     private let folder: URL
     private let folderProvider: (() -> (audio: URL, transcripts: URL))?
     var canStartRecording: () -> Bool = { true }
+    /// True when the model's files are installed. A note never starts with a model it cannot load.
+    var modelInstalled: (TranscriptionModel) -> Bool = { _ in true }
     private let onFinish: (TranscriptionJob) -> Void
     private let captures: NoteCaptureFactory
     private let defaults: UserDefaults
@@ -116,6 +125,15 @@ final class NoteRecorder: ObservableObject {
 
     func start(_ sources: NoteSources) {
         guard state == .idle, canStartRecording() else { return }
+        let model = settings.model(for: .notes)
+        guard model.supports(language: settings.noteLanguage) else {
+            state = .failed("\(model.name) does not transcribe \(LiveFormat.language(settings.noteLanguage)). Choose a Whisper model in Settings, Models.")
+            return
+        }
+        guard modelInstalled(model) else {
+            state = .failed("Download \(model.name) in Settings, Models before recording a note.")
+            return
+        }
         sessionLanguage = settings.noteLanguage
         settings.nextNoteLanguage = nil
         sessionVocabulary = settings.noteVocabulary
@@ -141,6 +159,9 @@ final class NoteRecorder: ObservableObject {
         guard state == .starting || state == .recording else { return }
         updateElapsed()
         state = .finishing
+        previewTask?.cancel()
+        liveText = [:]
+        livePreview = []
         stopRequested = true
         haltCapture()
         drainPendingAudio(flush: true)
@@ -204,9 +225,10 @@ final class NoteRecorder: ObservableObject {
             return
         }
 
-        sessionModel = settings.model
+        let model = settings.model(for: .notes)
+        sessionModel = model
         lease = host.acquireLease()
-        host.prewarm(sessionModel ?? settings.model)
+        host.prewarm(model)
 
         do {
             noteFolder = try makeNoteFolder()
@@ -388,7 +410,62 @@ final class NoteRecorder: ObservableObject {
         updateElapsed()
         checkCaptureHealth()
         drainPendingAudio(flush: false)
+        refreshPreviewIfDue()
         savePartialIfDue()
+    }
+
+    /// Parakeet decodes 20 seconds in a fraction of a second, so the open audio can be shown while it grows.
+    /// `LiveText` settles words as audio follows them, so the preview covers everything since the last chunk
+    /// while each request stays short. Previews run only when no chunk waits, and a chunk queued meanwhile
+    /// waits for at most one preview request.
+    private func refreshPreviewIfDue() {
+        if !settings.noteLiveText {
+            if previewTask != nil || !livePreview.isEmpty || !liveText.isEmpty {
+                previewTask?.cancel()
+                liveText = [:]
+                livePreview = []
+            }
+            return
+        }
+        guard state == .recording, let model = sessionModel, model.engine == .parakeet,
+              previewTask == nil, queue.isEmpty, !inFlight else { return }
+        if let lastPreview, NoteClock.seconds(clock.now - lastPreview) < 1.5 { return }
+        lastPreview = clock.now
+        let requests: [(NoteStream, Range<Double>, AudioChunk)] = [(NoteStream.microphone, micChunker), (.system, systemChunker)].compactMap { stream, chunker in
+            let live = liveText[stream] ?? LiveText(start: chunker.openStart)
+            guard let window = live.window(audioStart: chunker.openStart, end: chunker.openEnd),
+                  let audio = chunker.openAudio(window) else { return nil }
+            return (stream, window, audio)
+        }
+        guard !requests.isEmpty else { return }
+        let language = NoteLanguage.requestCode(setting: sessionLanguage, pinned: transcript.pinnedLanguage)
+        let token = generation
+        previewTask = Task { @MainActor [weak self] in
+            defer { if self?.generation == token { self?.previewTask = nil } }
+            for (stream, window, audio) in requests {
+                guard let self, !Task.isCancelled, token == self.generation, self.state == .recording,
+                      self.settings.noteLiveText, self.queue.isEmpty, !self.inFlight else { return }
+                var words: [TranscriptWord] = []
+                if audio.hasSpeech {
+                    guard let result = try? await self.host.transcribe(audio.samples, model: model, language: language, offset: audio.start, checkSilence: false),
+                          !Task.isCancelled, token == self.generation, self.state == .recording, self.settings.noteLiveText else { continue }
+                    words = result.timedWords
+                }
+                var live = self.liveText[stream] ?? LiveText(start: window.lowerBound)
+                live.accept(words, window: window)
+                // A chunk transcribed meanwhile already covers its words.
+                if let covered = self.coveredUntil[stream] { live.discard(through: covered) }
+                self.liveText[stream] = live
+            }
+            self?.publishPreview()
+        }
+    }
+
+    private func publishPreview() {
+        livePreview = [NoteStream.microphone, .system].compactMap { stream in
+            guard let text = liveText[stream]?.text, !text.isEmpty else { return nil }
+            return NoteLivePreview(speaker: NoteSpeakers.label(stream: stream, bothLive: labelingSpeakers), text: text)
+        }
     }
 
     private func updateElapsed() {
@@ -450,7 +527,7 @@ final class NoteRecorder: ObservableObject {
     }
 
     private func transcribe(_ item: NoteQueuedChunk, token: Int) async {
-        let model = sessionModel ?? settings.model
+        let model = sessionModel ?? settings.model(for: .notes)
         let speaker = NoteSpeakers.label(stream: item.stream, bothLive: labelingSpeakers)
         let prompt = NotePrompt.prompt(previousText: transcript.text(for: item.stream), chunkDuration: item.chunk.duration, vocabulary: sessionVocabulary)
         let language = NoteLanguage.requestCode(setting: sessionLanguage, pinned: transcript.pinnedLanguage)
@@ -474,6 +551,13 @@ final class NoteRecorder: ObservableObject {
         guard token == generation, !discardRequested else { return }
         if let message = host.speechCheckWarning { transcriptionWarning = message; publishWarning() }
         segments = transcript.accept(result, stream: item.stream, languageSetting: sessionLanguage, chunk: item.chunk)
+        let covered = item.chunk.stableUntil ?? (item.chunk.start + item.chunk.duration)
+        coveredUntil[item.stream] = max(coveredUntil[item.stream] ?? 0, covered)
+        if var live = liveText[item.stream] {
+            live.discard(through: covered)
+            liveText[item.stream] = live
+            publishPreview()
+        }
     }
 
     private func transcribeOnce(samples: [Float], model: TranscriptionModel, language: String, prompt: String?, offset: Double, speaker: Speaker?) async throws -> ServerTranscription {
@@ -532,13 +616,16 @@ final class NoteRecorder: ObservableObject {
             customTitle: title,
             recordedAt: recordedAt,
             segments: segments,
-            modelName: (sessionModel ?? settings.model).name,
+            modelName: (sessionModel ?? settings.model(for: .notes)).name,
             duration: elapsed,
             keepAudio: keepAudio,
             detectedSpeech: sawSpeech,
             transcriptionWarning: warning
         )
         releaseModel()
+        // With Keep model ready, put dictation's own model back once the note's model is no longer needed.
+        let dictationModel = settings.model(for: .dictation)
+        if settings.keepReady, dictationModel.id != sessionModel?.id, modelInstalled(dictationModel) { host.prewarm(dictationModel) }
         resetFields()
         state = .idle
         onFinish(job)
@@ -622,6 +709,12 @@ final class NoteRecorder: ObservableObject {
     private func resetFields() {
         elapsed = 0
         segments = []
+        previewTask?.cancel()
+        previewTask = nil
+        liveText = [:]
+        coveredUntil = [:]
+        livePreview = []
+        lastPreview = nil
         micLevel = 0
         systemLevel = 0
         pendingChunks = 0

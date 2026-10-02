@@ -55,8 +55,10 @@ curl -fsSL https://raw.githubusercontent.com/yt-dlp/yt-dlp/2026.08.19/LICENSE -o
 curl -fsSL https://raw.githubusercontent.com/yt-dlp/yt-dlp/2026.08.19/THIRD_PARTY_LICENSES.txt -o .runtime/licenses/yt-dlp-third-party.txt
 curl -fsSL https://raw.githubusercontent.com/denoland/deno/v2.9.4/LICENSE.md -o .runtime/licenses/Deno.txt
 for tool in .runtime/bin/*; do
+  [[ -f "$tool" && -x "$tool" ]] || continue
   if otool -L "$tool" | tail -n +2 | grep -E '/opt/homebrew|/usr/local' ; then
     echo "Non-portable dependency in $tool" >&2; exit 1
   fi
 done
+scripts/prepare-mlx.sh
 printf 'Runtime ready.\n'

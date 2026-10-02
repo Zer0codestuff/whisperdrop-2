@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import WhisperDropCore
 
 @main
 struct WhisperDropApp: App {
@@ -22,9 +23,9 @@ struct WhisperDropApp: App {
         let store = AppStore(root: root)
         let settings = AppSettings(defaults: defaults)
         let host = ModelHost(tool: { try store.tool($0) }, modelFile: { model in
-            let file = store.modelsFolder.appendingPathComponent(model.filename)
+            let file = model.location(in: store.modelsFolder)
             guard FileManager.default.fileExists(atPath: file.path) else {
-                throw AppFailure("Download the \(model.name) model in Models first.")
+                throw AppFailure("Download the \(model.name) model in Settings, Models first.")
             }
             return file
         }, processFile: root?.appendingPathComponent("whisper-server.pid"))
@@ -42,7 +43,10 @@ struct WhisperDropApp: App {
         store.canMoveSavedFiles = { [weak recorder] in recorder.map { !LiveNote.isActive($0.state) } ?? true }
         store.audioBoostEnabled = { [weak settings] in settings?.automaticAudioBoost ?? true }
         store.spokenLanguage = { [weak settings] in settings?.spokenLanguage ?? "auto" }
+        store.fileModel = { [weak settings] in settings?.model(for: .files) ?? TranscriptionModel.catalog.first { $0.id == "turbo" }! }
         recorder.canStartRecording = { [weak store] in store?.canRecordNotes ?? false }
+        recorder.modelInstalled = { [weak store] model in store?.downloaded.contains(model.id) ?? false }
+        dictation.modelInstalled = { [weak store] model in store?.downloaded.contains(model.id) ?? false }
         _store = StateObject(wrappedValue: store)
         _settings = StateObject(wrappedValue: settings)
         _host = StateObject(wrappedValue: host)
@@ -67,7 +71,7 @@ struct WhisperDropApp: App {
                 Button("Transcribe queue") { store.start() }.keyboardShortcut(.return, modifiers: .command).disabled(store.busy || store.queuedCount == 0)
                 Button("Stop transcription") { store.cancel() }.disabled(!store.busy)
                 Divider()
-                Button("Manage models…") { store.showModels = true }.keyboardShortcut("m", modifiers: [.command, .shift])
+                OpenModelsButton(defaults: appDefaults).keyboardShortcut("m", modifiers: [.command, .shift])
                 Button("Show activity…") { store.showDiagnostics = true }
             }
             CommandGroup(replacing: .help) { GuideMenuItem(defaults: appDefaults) }
@@ -114,9 +118,19 @@ struct WhisperDropApp: App {
     }
     @MainActor private func runVerificationIfRequested() async {
         let args = ProcessInfo.processInfo.arguments
+        if let i = args.firstIndex(of: "--verify-dictation"), args.indices.contains(i + 1) {
+            // Silent dictation from a file into whatever has focus after the delay. For live text checks.
+            let delay = args.firstIndex(of: "--verify-dictation-delay").flatMap { args.indices.contains($0 + 1) ? Double(args[$0 + 1]) : nil } ?? 5
+            try? await Task.sleep(for: .seconds(delay))
+            do { try dictation.replay(URL(fileURLWithPath: args[i + 1])) } catch { store.error = error.localizedDescription }
+            return
+        }
         guard let i = args.firstIndex(of: "--verify-audio"), args.indices.contains(i + 1) else { return }
-        store.selectedModel = "tiny"
-        store.spokenLanguage = { "en" }
+        let model = args.firstIndex(of: "--verify-model").flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
+        let language = args.firstIndex(of: "--verify-language").flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
+        let verificationModel = TranscriptionModel.catalog.first { $0.id == (model ?? "tiny") } ?? TranscriptionModel.catalog[0]
+        store.fileModel = { verificationModel }
+        store.spokenLanguage = { language ?? "en" }
         store.addFiles([URL(fileURLWithPath: args[i + 1])])
         store.start()
         while store.busy { try? await Task.sleep(for: .milliseconds(250)) }
@@ -140,6 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recorder?.finishForTermination()
         guard needsToWait else {
             host?.shutdown()
+            store?.shutdownEngines()
             return .terminateNow
         }
         store?.cancelAll()
@@ -149,6 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try? await Task.sleep(for: .milliseconds(100))
             }
             host?.shutdown()
+            store?.shutdownEngines()
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
@@ -161,6 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         recorder?.finishForTermination()
         host?.shutdown()
+        store?.shutdownEngines()
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let settings, let host {

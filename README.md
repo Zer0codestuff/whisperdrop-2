@@ -13,19 +13,20 @@ Turn recordings, videos and meetings into text, right on your Mac. Record a lect
 - Transcribe audio and video files. Drag them into the app or choose them with the file picker.
 - Import YouTube videos and entire playlists by pasting a link.
 - Record lectures, calls and meetings using your microphone, system audio, or both. The transcript appears as you record.
-- Save notes in your library and optionally keep the original audio. When recording both sources, the transcript labels them as You and Others.
+- Save notes in your library, rename them, and optionally keep the original audio. When recording both sources, the transcript labels them as You and Others.
 - Dictate into other apps by holding a shortcut key. The words appear where your cursor is.
 - Choose the spoken language once for files, dictation and notes, or let the app detect it. Add subject terms and names in Settings to help recognition.
 - Read transcripts with timestamps, copy the text, or export plain text and SRT or VTT subtitles.
 - Queue several recordings, cancel processing, retry failures, and return to saved transcripts later.
-- Choose from six downloadable speech models. Turbo is the default; smaller models use less memory.
+- Choose one model for everything in **Settings > Models**. Turbo is the default; smaller Whisper models use less memory. Advanced settings can give dictation, notes or files their own model.
+- Try Parakeet v3, an experimental engine that transcribes several times faster in 25 European languages. With it, dictation can write words into the text field while you speak, and notes show everything heard since the last confirmed paragraph.
 - Process speech locally. After downloading a model, you can transcribe local files, record notes and dictate offline.
 
 ## Get started
 
 1. Download the `.dmg` from the [latest release](https://github.com/Zer0codestuff/whisperdrop-2/releases/latest).
 2. Drag **WhisperDrop 2.app** into Applications. If you are updating, quit the old version first and replace it.
-3. Open the app and download a model from **Models**. Start with Turbo.
+3. Open the app and download a model in **Settings > Models** (also reachable from **Models** in the sidebar). Start with Turbo.
 4. Add a recording, paste a YouTube link, or choose **New note**.
 
 Your Mac needs Apple Silicon and macOS 14 or later. Internet access is needed for model downloads and YouTube imports.
@@ -36,7 +37,9 @@ The current release is not notarized by Apple, so macOS may block the first laun
 
 Notes use the app language. To record one note in another language, choose it in **Note language** beside **New note**; the next note uses it once. Use **Keep audio** if you also want to save the recording. You can find kept audio later using the note's audio button.
 
-For dictation, hold **fn** while speaking and release it to insert the text. Set **System Settings > Keyboard > Press 🌐 key to > Do Nothing** so macOS does not open its emoji picker or Dictation at the same time. You can choose a different shortcut in the app's Settings.
+To rename a saved note, select it and click **Rename…** beside its title, or right-click the note in the library and choose **Rename…**. The new name is saved with the note.
+
+For dictation, hold **fn** while speaking and release it to insert the text. With Parakeet v3 and **Live text** set to **In the text field**, words appear in the field while you speak: native apps show every word and correct it in place, while browsers and other apps receive words once they settle, a few seconds behind. Press Escape to discard the dictation, including the words already written. Set **System Settings > Keyboard > Press 🌐 key to > Do Nothing** so macOS does not open its emoji picker or Dictation at the same time. You can choose a different shortcut in the app's Settings.
 
 On first launch a short guide explains each feature and asks for the permissions they need. You can skip it and reopen it from Help. Microphone access enables voice capture; Accessibility and Input Monitoring enable dictation; system audio access enables recording calls or other audio playing on your Mac.
 
@@ -52,7 +55,7 @@ Model downloads contact Hugging Face, and YouTube imports contact YouTube. Your 
 
 WhisperDrop 2 is a native SwiftUI app built with Swift Package Manager. It runs whisper.cpp locally with Metal acceleration and CPU fallback. FFmpeg handles media conversion; yt-dlp and Deno handle YouTube imports. These tools are bundled, so the installed app does not need Homebrew, Python or a terminal.
 
-Models use Whisper GGML files, not GGUF. Downloads are checked against their SHA-256 hashes before installation.
+Whisper models use GGML files, not GGUF. Downloads are checked against their SHA-256 hashes before installation.
 
 | Model | Quantization | Download |
 | --- | --- | ---: |
@@ -62,10 +65,13 @@ Models use Whisper GGML files, not GGUF. Downloads are checked against their SHA
 | Medium | Q5_0 | 539 MB |
 | Turbo, default | Q5_0 | 574 MB |
 | Turbo Q8 | Q8_0 | 874 MB |
+| Parakeet v3, experimental | 4-bit encoder | 489 MB |
 
-Sizes are decimal and rounded. Models come from [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp). Larger models are not always more accurate for a particular recording. [Model research](docs/models.md) covers engines considered for future versions.
+Sizes are decimal and rounded. Whisper models come from [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp); Parakeet uses NVIDIA weights converted and quantized by mlx-community and sonic-speech. Larger models are not always more accurate for a particular recording. [Model research](docs/models.md) covers the experiments.
 
-Dictation and notes share a resident model process. It unloads after 10 minutes idle by default. Settings offer other intervals, and **Keep model ready** in the menu bar keeps it loaded until you turn that off or quit.
+Parakeet v3 is NVIDIA's Parakeet TDT 0.6B v3, run by the bundled `parakeet-server` on MLX. It covers 25 European languages, including Italian, English, French, German and Spanish, and detects the language by itself. It does not use the vocabulary lists. Files are sent in windows of up to 35 seconds cut at pauses. With Parakeet, **Live text** decodes the newest audio about every second. Words settle once about six seconds of audio follow them; later requests start ten seconds before the settled words and cover at most 30 seconds, so requests stay short however long you speak. See [the Parakeet evaluation](docs/parakeet-evaluation.md) for accuracy, speed and known limits.
+
+Dictation and notes share a resident model process. It unloads after 10 minutes idle by default. **Settings > Models > Unload model** offers other intervals; **Keep model ready** in the menu bar is the same setting as its **Keep model ready** choice. When dictation and notes use different models, switching between them reloads the process.
 
 Lecture notes wait for pauses, with a 60-second limit per request. Forced cuts retain two seconds of audio to help complete words at the boundary. Read the [lecture transcription tests](docs/note-transcription.md) for measured results and remaining limitations.
 
@@ -82,7 +88,7 @@ scripts/build-app.sh
 open 'dist/WhisperDrop 2.app'
 ```
 
-Runtime preparation builds pinned whisper.cpp and FFmpeg sources and downloads verified yt-dlp and Deno binaries. The first build takes several minutes. After checking the app, create a disk image with:
+Runtime preparation builds pinned whisper.cpp and FFmpeg sources and downloads verified yt-dlp and Deno binaries. It also extracts the MLX shader libraries for `parakeet-server` from pinned `mlx-metal` wheels, because SwiftPM does not compile Metal sources. The first build takes several minutes. After checking the app, create a disk image with:
 
 ```bash
 scripts/package-dmg.sh
@@ -103,6 +109,7 @@ Private app data stays in `~/Library/Application Support/WhisperDrop 2/`:
 - `history.json`: library, queue state and saved folder.
 - `Work/`: temporary audio, removed after processing or cancellation.
 - `whisper-server.pid`: the resident model process, removed on quit.
+- `parakeet-files.pid`: the Parakeet process used for file transcription, removed when the queue finishes.
 
 Export uses a standard save dialog starting in your Transcripts folder. Removing a library entry leaves exported files and archived transcripts on disk. Source files must remain available until processing finishes. Interrupted jobs return to the queue after relaunch.
 

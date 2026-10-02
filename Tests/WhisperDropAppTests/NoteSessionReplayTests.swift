@@ -14,8 +14,9 @@ final class NoteSessionReplayTests: XCTestCase {
         let pace = Double(env["WHISPERDROP_SESSION_SPEED"] ?? "1") ?? 1
         let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let folder = URL(fileURLWithPath: report + ".recordings", isDirectory: true)
-        let models = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/WhisperDrop 2/Models")
-        let host = ModelHost(tool: { repo.appendingPathComponent(".runtime/bin/\($0)") }, modelFile: { models.appendingPathComponent($0.filename) },
+        let models = env["WHISPERDROP_SESSION_MODELS"].map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/WhisperDrop 2/Models")
+        let host = ModelHost(tool: { repo.appendingPathComponent(".runtime/bin/\($0)") }, modelFile: { $0.location(in: models) },
                              processFile: URL(fileURLWithPath: report + ".pid"))
         defer { host.shutdown() }
         let suite = "WhisperDrop.SessionReplay.\(UUID().uuidString)"
@@ -23,10 +24,11 @@ final class NoteSessionReplayTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let settings = AppSettings(defaults: defaults)
         settings.spokenLanguage = env["WHISPERDROP_SESSION_LANGUAGE"] ?? "it"
-        settings.liveModel = env["WHISPERDROP_SESSION_MODEL"] ?? "turbo"
+        settings.mainModel = env["WHISPERDROP_SESSION_MODEL"] ?? "turbo"
         settings.noteVocabulary = env["WHISPERDROP_SESSION_VOCABULARY"] ?? ""
         settings.keepNoteAudio = env["WHISPERDROP_SESSION_KEEP_AUDIO"] != "0"
         settings.automaticAudioBoost = env["WHISPERDROP_SESSION_AUDIO_BOOST"] != "0"
+        settings.noteLiveText = env["WHISPERDROP_SESSION_LIVE_PREVIEW"] != "0"
         let source = try ReplayCapture(file: URL(fileURLWithPath: input), speed: pace)
         var saved: TranscriptionJob?
         let factory = NoteCaptureFactory(makeMicrophone: { source }, makeSystemTap: { source }, makeWriter: { try AudioFileWriter(url: $0) },
@@ -38,8 +40,22 @@ final class NoteSessionReplayTests: XCTestCase {
         let started = Date()
         recorder.start(.microphone)
         let deadline = Date().addingTimeInterval(source.duration / max(0.01, pace) + source.duration + 120)
+        var previews: [[String: Any]] = []
+        var lastPreview: [NoteLivePreview] = []
+        var lastSegmentCount = 0
+        var segmentEvents: [[String: Any]] = []
         while saved == nil && Date() < deadline {
             if case .failed(let error) = recorder.state { XCTFail(error); break }
+            let wall = Date().timeIntervalSince(started)
+            if recorder.livePreview != lastPreview {
+                lastPreview = recorder.livePreview
+                previews.append(["wall": wall, "recording_seconds": recorder.elapsed, "text": lastPreview.map(\.text).joined(separator: " ")])
+            }
+            if recorder.segments.count != lastSegmentCount {
+                lastSegmentCount = recorder.segments.count
+                segmentEvents.append(["wall": wall, "recording_seconds": recorder.elapsed, "segments": lastSegmentCount,
+                                      "last_end": recorder.segments.last?.end ?? 0])
+            }
             try await Task.sleep(for: .milliseconds(100))
         }
         let job = try XCTUnwrap(saved, "Session did not finish")
@@ -73,6 +89,8 @@ final class NoteSessionReplayTests: XCTestCase {
         data["wall_seconds"] = Date().timeIntervalSince(started)
         data["speed"] = pace
         data["dropped_packets"] = source.droppedPacketCount
+        data["live_previews"] = previews
+        data["segment_events"] = segmentEvents
         try JSONSerialization.data(withJSONObject: data, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: report))
     }
 }

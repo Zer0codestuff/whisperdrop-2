@@ -7,6 +7,7 @@ import WhisperDropCore
 struct LiveNoteView: View {
     @EnvironmentObject private var recorder: NoteRecorder
     @State private var confirmDiscard = false
+    @State private var following = true
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -17,7 +18,7 @@ struct LiveNoteView: View {
             }
             ZStack {
                 Color.black
-                if recorder.segments.isEmpty { waiting } else { transcript }
+                if recorder.segments.isEmpty && recorder.livePreview.isEmpty { waiting } else { transcript }
             }
             controls.padding(.horizontal, 28).padding(.bottom, 24).padding(.top, 12)
         }
@@ -61,37 +62,72 @@ struct LiveNoteView: View {
     }
 
     private var transcript: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    HStack {
-                        Text("Live transcript").font(.system(size: 12, weight: .medium)).foregroundStyle(LivePalette.secondary)
-                        Spacer()
-                        if recorder.pendingChunks > 1 {
-                            HStack(spacing: 6) {
-                                ProgressView().controlSize(.mini)
-                                Text("Catching up… \(recorder.pendingChunks)").monospacedDigit()
-                            }.font(.system(size: 11)).foregroundStyle(LivePalette.secondary)
-                        }
-                    }.padding(.bottom, 8)
-                    ForEach(TranscriptOutput.paragraphs(recorder.segments)) { segment in
-                        HStack(alignment: .firstTextBaseline, spacing: 14) {
-                            Text(segment.timeLabel).font(.system(size: 11)).monospacedDigit().foregroundStyle(LivePalette.secondary).frame(width: 44, alignment: .leading)
-                            if let speaker = segment.speaker {
-                                Text(speaker.label).font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(speaker == .you ? LivePalette.green : .white).frame(width: 44, alignment: .leading)
+        GeometryReader { viewport in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        HStack {
+                            Text("Live transcript").font(.system(size: 12, weight: .medium)).foregroundStyle(LivePalette.secondary)
+                            Spacer()
+                            if recorder.pendingChunks > 1 {
+                                HStack(spacing: 6) {
+                                    ProgressView().controlSize(.mini)
+                                    Text("Catching up… \(recorder.pendingChunks)").monospacedDigit()
+                                }.font(.system(size: 11)).foregroundStyle(LivePalette.secondary)
                             }
-                            Text(segment.text).font(.system(size: 16)).lineSpacing(7).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                        }.id(segment.id)
+                        }.padding(.bottom, 8)
+                        ForEach(TranscriptOutput.paragraphs(recorder.segments)) { segment in
+                            HStack(alignment: .firstTextBaseline, spacing: 14) {
+                                Text(segment.timeLabel).font(.system(size: 11)).monospacedDigit().foregroundStyle(LivePalette.secondary).frame(width: 44, alignment: .leading)
+                                if let speaker = segment.speaker {
+                                    Text(speaker.label).font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(speaker == .you ? LivePalette.green : .white).frame(width: 44, alignment: .leading)
+                                }
+                                Text(segment.text).font(.system(size: 16)).lineSpacing(7).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                            }.id(segment.id)
+                        }
+                        // Words heard since the last confirmed paragraph. Replaced by confirmed text as chunks finish.
+                        ForEach(recorder.livePreview) { preview in
+                            HStack(alignment: .firstTextBaseline, spacing: 14) {
+                                Text("Live").font(.system(size: 11)).foregroundStyle(LivePalette.secondary).frame(width: 44, alignment: .leading)
+                                if let speaker = preview.speaker {
+                                    Text(speaker.label).font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(LivePalette.secondary).frame(width: 44, alignment: .leading)
+                                }
+                                Text(preview.text).font(.system(size: 16)).lineSpacing(7).foregroundStyle(LivePalette.secondary)
+                                    .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                            }.accessibilityLabel("Unconfirmed: \(preview.text)")
+                        }
+                        Color.clear.frame(height: 1).id("bottom")
+                            .background(GeometryReader { marker in
+                                Color.clear.preference(key: LiveBottomEdge.self, value: marker.frame(in: .named("liveTranscript")).maxY)
+                            })
+                    }.padding(36).frame(maxWidth: 900, alignment: .leading).frame(maxWidth: .infinity)
+                }
+                .coordinateSpace(name: "liveTranscript")
+                .onPreferenceChange(LiveBottomEdge.self) { edge in
+                    // Follow new text only while the end is in view, so earlier text can be read while recording.
+                    following = edge <= viewport.size.height + 80
+                }
+                .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: recorder.segments.count) { followNewText(proxy) }
+                .onChange(of: recorder.livePreview) { followNewText(proxy) }
+                .overlay(alignment: .bottomTrailing) {
+                    if !following {
+                        Button {
+                            withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                        } label: { Label("Latest", systemImage: "arrow.down") }
+                            .buttonStyle(LiveQuietButton()).padding(20)
+                            .help("Scroll to the newest words")
                     }
-                    Color.clear.frame(height: 1).id("bottom")
-                }.padding(36).frame(maxWidth: 900, alignment: .leading).frame(maxWidth: .infinity)
-            }
-            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
-            .onChange(of: recorder.segments.count) {
-                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                }
             }
         }
+    }
+
+    private func followNewText(_ proxy: ScrollViewProxy) {
+        guard following else { return }
+        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
     }
 
     private var controls: some View {
@@ -141,6 +177,11 @@ struct LiveNoteView: View {
         case .failed: "Failed"
         }
     }
+}
+
+private struct LiveBottomEdge: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
 /// Sidebar control to start a new note with a chosen source. Reads NoteRecorder and AppSettings from the environment.

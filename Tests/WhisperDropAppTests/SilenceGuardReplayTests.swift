@@ -12,7 +12,7 @@ final class SilenceGuardReplayTests: XCTestCase {
         let fixtures = URL(fileURLWithPath: directory)
         let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let models = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/WhisperDrop 2/Models")
-        let host = ModelHost(tool: { repo.appendingPathComponent(".runtime/bin/\($0)") }, modelFile: { models.appendingPathComponent($0.filename) },
+        let host = ModelHost(tool: { repo.appendingPathComponent(".runtime/bin/\($0)") }, modelFile: { $0.location(in: models) },
                              processFile: fixtures.appendingPathComponent("control.pid"))
         defer { host.shutdown() }
         let model = try XCTUnwrap(TranscriptionModel.catalog.first { $0.id == "turbo" })

@@ -6,21 +6,24 @@ import WhisperDropCore
 
 /// Contract file. Settings window content. Reads AppStore, AppSettings, ModelHost, DictationController and Permissions from the environment.
 struct SettingsView: View {
-    fileprivate enum Tab: String, CaseIterable, Identifiable {
-        case general = "General", dictation = "Dictation", model = "Model", notes = "Notes", permissions = "Permissions"
+    enum Tab: String, CaseIterable, Identifiable {
+        case general = "General", models = "Models", dictation = "Dictation", notes = "Notes", permissions = "Permissions"
         var id: String { rawValue }
         var symbol: String {
             switch self {
             case .general: "gearshape"
+            case .models: "square.stack.3d.up"
             case .dictation: "waveform"
-            case .model: "cpu"
             case .notes: "note.text"
             case .permissions: "lock.shield"
             }
         }
     }
+    /// UserDefaults key of the selected pane, so other windows can open Settings on Models.
+    static let tabKey = "settingsTab"
     @EnvironmentObject private var permissions: Permissions
-    @State private var tab: Tab = .general
+    @AppStorage(SettingsView.tabKey) private var storedTab = Tab.general.rawValue
+    private var tab: Tab { Tab(rawValue: storedTab) ?? .general }
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 2) {
@@ -29,7 +32,7 @@ struct SettingsView: View {
                     Text("2").font(.system(size: 11, weight: .medium)).foregroundStyle(LivePalette.green)
                 }.padding(.horizontal, 12).padding(.top, 40).padding(.bottom, 18)
                 ForEach(Tab.allCases) { item in
-                    Button { tab = item } label: {
+                    Button { storedTab = item.rawValue } label: {
                         HStack(spacing: 9) {
                             Image(systemName: item.symbol).font(.system(size: 12)).frame(width: 16)
                                 .foregroundStyle(tab == item ? LivePalette.green : LivePalette.secondary)
@@ -58,7 +61,7 @@ struct SettingsView: View {
                     switch tab {
                     case .general: GeneralPane()
                     case .dictation: DictationPane()
-                    case .model: ModelPane()
+                    case .models: ModelsPane()
                     case .notes: NotesPane()
                     case .permissions: PermissionsPane()
                     }
@@ -205,7 +208,7 @@ private struct DictationPane: View {
                 ForEach(DictationMode.allCases) { Text($0.label).tag($0) }
             }.pickerStyle(.menu).labelsHidden().frame(width: 270)
         }.disabled(!settings.dictationEnabled)
-        SettingRow(title: "Auto paste", detail: "Types the text into the focused app. When off, it is only copied.") {
+        SettingRow(title: "Auto paste", detail: "Puts the text into the focused app. When off, it is only copied.") {
             Switch(isOn: $settings.autoPaste)
         }
         SettingRow(title: "Restore clipboard", detail: "Puts back what you had copied after pasting.") {
@@ -214,10 +217,19 @@ private struct DictationPane: View {
         SettingRow(title: "Sounds", detail: "A short tone when listening starts and ends.") {
             Switch(isOn: $settings.sounds)
         }
+        SettingRow(title: "Model", detail: "Dictation uses \(model.name). Change it in Models.") {
+            OpenModelsButton { Text("Models…") }.buttonStyle(.plain).font(.system(size: 12, weight: .medium)).foregroundStyle(LivePalette.green)
+        }
+        SettingRow(title: "Live text", detail: liveTextDetail) {
+            Picker("", selection: $settings.dictationLiveText) {
+                ForEach(DictationLiveText.allCases) { Text($0.label).tag($0) }
+            }.pickerStyle(.menu).labelsHidden().frame(width: 190)
+        }.disabled(model.engine != .parakeet)
         Rectangle().fill(LivePalette.line).frame(height: 1)
         VStack(alignment: .leading, spacing: 8) {
             Text("Vocabulary").font(.system(size: 13))
-            Text("Names, brands and terms Whisper should expect, separated by commas. A hint for spelling, not a rule.")
+            Text(model.usesPrompt ? "Names, brands and terms Whisper should expect, separated by commas. A hint for spelling, not a rule."
+                 : "\(model.name) ignores this list. It is used again when dictation uses a Whisper model.")
                 .font(.system(size: 11)).foregroundStyle(LivePalette.secondary).fixedSize(horizontal: false, vertical: true)
             TextField("WhisperDrop, Turbo, Gabriele", text: $settings.vocabulary, axis: .vertical)
                 .textFieldStyle(.plain).font(.system(size: 13)).lineLimit(2...4)
@@ -228,18 +240,80 @@ private struct DictationPane: View {
         .onChange(of: settings.hotkey) { dictation.refresh() }
         .onChange(of: settings.dictationMode) { dictation.refresh() }
     }
+    private var model: TranscriptionModel { settings.model(for: .dictation) }
+    private var liveTextDetail: String {
+        guard model.engine == .parakeet else { return "Available with Parakeet v3. Whisper is too slow to update while you speak." }
+        switch settings.dictationLiveText {
+        case .inField where !settings.autoPaste: return "Turn on Auto paste to see the words in the text field. Until then they appear in the dictation bar."
+        case .inField: return "Words appear in the text field while you speak. Native apps show every word and correct it in place. Browsers and other apps get words typed once they settle, about six seconds behind; the bar shows the newest ones."
+        case .bar: return "Words appear in the dictation bar. The text is inserted when you finish."
+        case .off: return "The text is inserted when you finish."
+        }
+    }
 }
 
-// MARK: Model
+// MARK: Models
 
-private struct ModelPane: View {
+/// Opens Settings on the Models pane. Used by the sidebar, the main window and the Transcription menu.
+struct OpenModelsButton<Label: View>: View {
+    @Environment(\.openSettings) private var openSettings
+    @AppStorage private var tab: String
+    private let label: Label
+    init(defaults: UserDefaults? = nil, @ViewBuilder label: () -> Label) {
+        _tab = defaults.map { AppStorage(wrappedValue: SettingsView.Tab.general.rawValue, SettingsView.tabKey, store: $0) }
+            ?? AppStorage(wrappedValue: SettingsView.Tab.general.rawValue, SettingsView.tabKey)
+        self.label = label()
+    }
+    var body: some View {
+        Button {
+            tab = SettingsView.Tab.models.rawValue
+            openSettings()
+            NSApp.activate(ignoringOtherApps: true)
+        } label: { label }
+    }
+}
+
+extension OpenModelsButton where Label == Text {
+    init(defaults: UserDefaults? = nil) { self.init(defaults: defaults) { Text("Models…") } }
+}
+
+private struct ModelsPane: View {
     @EnvironmentObject private var store: AppStore
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var host: ModelHost
-    @Environment(\.openWindow) private var openWindow
+    @EnvironmentObject private var recorder: NoteRecorder
+    @State private var showTasks = false
     var body: some View {
-        let downloaded = TranscriptionModel.catalog.filter { store.downloaded.contains($0.id) }
-        PaneHeader(title: "Model", subtitle: "Dictation and notes share one Whisper model that stays loaded while you use it.")
+        PaneHeader(title: "Models", subtitle: "The model does the listening. Choose it here; dictation, notes and files all use it.")
+        statusCard.padding(.bottom, 14)
+        ForEach(Array(TranscriptionModel.catalog.enumerated()), id: \.element.id) { index, model in
+            ModelRow(model: model, divider: index > 0)
+        }
+        Rectangle().fill(LivePalette.line).frame(height: 1)
+        if let warning = languageWarning {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.circle").foregroundStyle(.red)
+                Text(warning).font(.system(size: 11)).foregroundStyle(LivePalette.secondary).fixedSize(horizontal: false, vertical: true)
+            }.padding(.vertical, 12)
+        }
+        tasks.padding(.top, 18)
+        SettingRow(title: "Unload model", detail: "Frees memory when dictation and notes are idle. A recording note always keeps its model loaded. Keep model ready is also in the menu bar.") {
+            Picker("", selection: $settings.residency) {
+                ForEach(ModelResidency.allCases) { Text($0 == .always ? "Keep model ready" : $0.label).tag($0) }
+            }.pickerStyle(.menu).labelsHidden().frame(width: 230)
+        }
+        Rectangle().fill(LivePalette.line).frame(height: 1)
+        Text("Whisper GGML, Q5 quantization except Turbo Q8. Parakeet v3, NVIDIA weights with a 4-bit encoder on MLX. Downloads are verified before installation.")
+            .font(.system(size: 11)).foregroundStyle(LivePalette.secondary).fixedSize(horizontal: false, vertical: true).padding(.top, 14)
+            .onAppear { showTasks = ModelTask.allCases.contains { settings.ownModel(for: $0) != nil } }
+            .onChange(of: settings.residency) { _, value in
+                host.residency = value
+                host.keepReady = settings.keepReady
+                if settings.keepReady { LiveModels.prewarm(settings: settings, store: store, host: host) }
+            }
+    }
+
+    private var statusCard: some View {
         HStack(spacing: 12) {
             Circle().fill(stateColor).frame(width: 7, height: 7)
             VStack(alignment: .leading, spacing: 3) {
@@ -249,53 +323,51 @@ private struct ModelPane: View {
             Spacer()
             switch host.state {
             case .unloaded, .failed:
-                Button("Load now") { host.prewarm(settings.model) }.buttonStyle(LiveQuietButton())
-                    .disabled(!store.downloaded.contains(settings.liveModel))
+                Button("Load now") { host.prewarm(settings.model(for: .dictation)) }.buttonStyle(LiveQuietButton())
+                    .disabled(!store.downloaded.contains(settings.model(for: .dictation).id))
             case .loading, .ready, .busy:
-                Button("Unload now") { host.unload() }.buttonStyle(LiveQuietButton()).disabled(host.state == .busy)
+                Button("Unload now") { host.unload() }.buttonStyle(LiveQuietButton())
+                    .disabled(host.state == .busy || LiveNote.isActive(recorder.state))
             }
         }
         .padding(14).background(LivePalette.surface, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(LivePalette.line)).padding(.bottom, 14)
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(LivePalette.line))
+    }
 
-        SettingRow(title: "Live model", detail: "Used for dictation and notes. Turbo is the usual choice.", divider: false) {
-            if downloaded.isEmpty {
-                Text("No models yet").font(.system(size: 12)).foregroundStyle(LivePalette.secondary)
-            } else {
-                Picker("", selection: $settings.liveModel) {
-                    ForEach(downloaded) { Text($0.name).tag($0.id) }
-                    if !store.downloaded.contains(settings.liveModel) {
-                        Text("\(settings.model.name) (not downloaded)").tag(settings.liveModel)
-                    }
-                }.pickerStyle(.menu).labelsHidden().frame(width: 190)
+    @ViewBuilder private var tasks: some View {
+        Button { withAnimation(.easeOut(duration: 0.15)) { showTasks.toggle() } } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).rotationEffect(.degrees(showTasks ? 90 : 0))
+                Text("Advanced: a different model for each task").font(.system(size: 13))
+                Spacer()
+            }.contentShape(Rectangle())
+        }.buttonStyle(.plain).padding(.bottom, 4)
+        if showTasks {
+            Text("For example, Parakeet v3 for dictation and Whisper for lectures. Switching between two models reloads the speech model, which takes a few seconds.")
+                .font(.system(size: 11)).foregroundStyle(LivePalette.secondary).fixedSize(horizontal: false, vertical: true).padding(.bottom, 4)
+            ForEach(ModelTask.allCases) { task in
+                SettingRow(title: task.label, divider: task != .dictation) {
+                    Picker("", selection: Binding(get: { settings.ownModel(for: task) ?? "" }, set: { settings.setOwnModel($0.isEmpty ? nil : $0, for: task) })) {
+                        Text("Main model (\(settings.model.name))").tag("")
+                        Divider()
+                        ForEach(TranscriptionModel.catalog.filter { store.downloaded.contains($0.id) && $0.id != settings.mainModel }) { model in
+                            Text(model.name).tag(model.id)
+                        }
+                        if let own = settings.ownModel(for: task), !store.downloaded.contains(own) {
+                            Text("\(settings.model(for: task).name) (not downloaded)").tag(own)
+                        }
+                    }.pickerStyle(.menu).labelsHidden().frame(width: 230)
+                }
             }
         }
-        HStack(spacing: 10) {
-            if !store.downloaded.contains(settings.liveModel) {
-                Image(systemName: "exclamationmark.circle").foregroundStyle(.red)
-                Text("\(settings.model.name) is not downloaded yet.").font(.system(size: 11)).foregroundStyle(LivePalette.secondary)
-            }
-            Spacer()
-            Button("Manage models") {
-                openWindow(id: "main")
-                NSApp.activate(ignoringOtherApps: true)
-                store.showModels = true
-            }.buttonStyle(.plain).font(.system(size: 11, weight: .medium)).foregroundStyle(LivePalette.green)
-        }.padding(.bottom, 12)
-        SettingRow(title: "Keep model ready", detail: "Never unload. Uses memory, but the first word is instant.") {
-            Switch(isOn: $settings.keepReady)
-        }
-        SettingRow(title: "Unload model", detail: settings.keepReady ? "Off while Keep model ready is on." : "Frees memory when dictation and notes are idle. A note always keeps it loaded.") {
-            Picker("", selection: $settings.residency) {
-                ForEach(ModelResidency.allCases) { Text($0.label).tag($0) }
-            }.pickerStyle(.menu).labelsHidden().frame(width: 230)
-        }.disabled(settings.keepReady)
         Rectangle().fill(LivePalette.line).frame(height: 1)
-            .onChange(of: settings.keepReady) { _, on in
-                host.keepReady = on
-                if on, store.downloaded.contains(settings.liveModel) { host.prewarm(settings.model) }
-            }
-            .onChange(of: settings.residency) { _, value in host.residency = value }
+    }
+
+    private var languageWarning: String? {
+        let unsupported = ModelTask.allCases.filter { !settings.model(for: $0).supports(language: settings.spokenLanguage) }
+        guard !unsupported.isEmpty else { return nil }
+        let names = Set(unsupported.map { settings.model(for: $0).name }).sorted().joined(separator: " and ")
+        return "\(names) does not transcribe \(LiveFormat.language(settings.spokenLanguage)), your spoken language. Choose a Whisper model, or change the language in General."
     }
     private var isFailed: Bool { if case .failed = host.state { true } else { false } }
     private var stateColor: Color {
@@ -318,10 +390,83 @@ private struct ModelPane: View {
     private var stateDetail: String {
         let name = host.loadedModel.flatMap { id in TranscriptionModel.catalog.first { $0.id == id }?.name }
         switch host.state {
-        case .unloaded, .failed: return "Loads on first dictation or note."
-        case .loading: return "Starting \(name ?? settings.model.name)."
-        case .ready, .busy: return "\(name ?? settings.model.name) is in memory."
+        case .unloaded, .failed: return "Loads on the first dictation or note."
+        case .loading: return "Starting \(name ?? settings.model(for: .dictation).name)."
+        case .ready, .busy: return "\(name ?? settings.model(for: .dictation).name) is in memory."
         }
+    }
+}
+
+/// One catalog entry: download, use as the main model, or delete.
+private struct ModelRow: View {
+    @EnvironmentObject private var store: AppStore
+    @EnvironmentObject private var settings: AppSettings
+    let model: TranscriptionModel
+    var divider = true
+    var body: some View {
+        let downloaded = store.downloaded.contains(model.id)
+        let main = settings.mainModel == model.id
+        VStack(spacing: 0) {
+            if divider { Rectangle().fill(LivePalette.line).frame(height: 1) }
+            HStack(alignment: .center, spacing: 14) {
+                Image(systemName: main ? "largecircle.fill.circle" : "circle")
+                    .font(.system(size: 14)).foregroundStyle(main ? LivePalette.green : LivePalette.secondary.opacity(downloaded ? 1 : 0.4))
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text(model.name).font(.system(size: 13, weight: .medium))
+                        Text(model.size).font(.system(size: 11)).foregroundStyle(LivePalette.secondary)
+                        if model.experimental {
+                            Text("Experimental").font(.system(size: 10, weight: .medium)).foregroundStyle(LivePalette.green)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(LivePalette.green.opacity(0.6)))
+                        }
+                        if let tasks = taskNote { Text(tasks).font(.system(size: 11)).foregroundStyle(LivePalette.green) }
+                    }
+                    Text(model.detail).font(.system(size: 11)).foregroundStyle(LivePalette.secondary).fixedSize(horizontal: false, vertical: true)
+                    if store.downloadingModel == model.id {
+                        HStack(spacing: 8) {
+                            ProgressView(value: store.modelProgress).frame(width: 200)
+                            Text("\(Int(store.modelProgress * 100))%").font(.system(size: 11)).monospacedDigit().foregroundStyle(LivePalette.secondary)
+                        }
+                    }
+                }
+                Spacer(minLength: 12)
+                if store.downloadingModel == model.id {
+                    Button("Cancel", action: store.cancelModelDownload).buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(LivePalette.green)
+                } else if downloaded {
+                    if main {
+                        Text("In use").font(.system(size: 12, weight: .medium)).foregroundStyle(LivePalette.green)
+                    } else {
+                        Button("Use") { settings.mainModel = model.id }.buttonStyle(LiveQuietButton())
+                    }
+                    Button { store.deleteModel(model) } label: { Image(systemName: "trash").foregroundStyle(LivePalette.secondary) }
+                        .buttonStyle(.plain).disabled(store.busy || store.downloadingModel != nil)
+                        .help("Delete \(model.name)").accessibilityLabel("Delete \(model.name)")
+                } else {
+                    Button("Download") { store.downloadModel(model) }.buttonStyle(LiveQuietButton())
+                        .disabled(store.busy || store.downloadingModel != nil)
+                        .accessibilityLabel("Download \(model.name)")
+                }
+            }
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+            .onTapGesture { if downloaded { settings.mainModel = model.id } }
+        }
+    }
+    /// Tasks that use this model through their own choice, or "Not downloaded" for the main model.
+    private var taskNote: String? {
+        if settings.mainModel == model.id, !store.downloaded.contains(model.id) { return "Selected, not downloaded" }
+        let own = ModelTask.allCases.filter { settings.ownModel(for: $0) == model.id }.map(\.shortLabel)
+        return own.isEmpty ? nil : "Used for " + own.joined(separator: ", ")
+    }
+}
+
+/// Loads the model that has to answer first: dictation's.
+@MainActor enum LiveModels {
+    static func prewarm(settings: AppSettings, store: AppStore, host: ModelHost) {
+        let model = settings.model(for: .dictation)
+        if store.downloaded.contains(model.id) { host.prewarm(model) }
     }
 }
 
@@ -330,16 +475,26 @@ private struct ModelPane: View {
 private struct NotesPane: View {
     @EnvironmentObject private var settings: AppSettings
     var body: some View {
+        let model = settings.model(for: .notes)
         PaneHeader(title: "Notes", subtitle: "Record a call, a lecture or a meeting. The transcript builds while you record.")
         SettingRow(title: "Default source", detail: "You is the microphone. Others is audio from other apps.", divider: false) {
             Picker("", selection: $settings.noteSources) {
                 ForEach(NoteSources.allCases) { Text($0.label).tag($0) }
             }.pickerStyle(.menu).labelsHidden().frame(width: 230)
         }
-        SettingRow(title: "Words and names", detail: "Try a short list of subject terms in the spoken language.") {
+        SettingRow(title: "Model", detail: "Notes use \(model.name). Change it in Models.") {
+            OpenModelsButton { Text("Models…") }.buttonStyle(.plain).font(.system(size: 12, weight: .medium)).foregroundStyle(LivePalette.green)
+        }
+        SettingRow(title: "Live text", detail: model.engine == .parakeet
+                   ? "Shows the words heard since the last confirmed paragraph, in grey, while you record."
+                   : "Available with Parakeet v3. With Whisper, text appears after a pause or about a minute of speech.") {
+            Switch(isOn: $settings.noteLiveText)
+        }.disabled(model.engine != .parakeet)
+        SettingRow(title: "Words and names", detail: model.usesPrompt ? "Try a short list of subject terms in the spoken language."
+                   : "\(model.name) ignores this list. It is used with Whisper models.") {
             TextField("Subject terms", text: $settings.noteVocabulary).textFieldStyle(.roundedBorder).frame(width: 230)
         }
-        SettingRow(title: "Keep the recording", detail: "Saves the original audio in your Audio folder. When off, it is deleted once the transcript is saved.") {
+        SettingRow(title: "Keep audio", detail: "Saves the original recording in your Audio folder. When off, it is deleted once the transcript is saved. Also beside New note.") {
             Switch(isOn: $settings.keepNoteAudio)
         }
         Rectangle().fill(LivePalette.line).frame(height: 1)

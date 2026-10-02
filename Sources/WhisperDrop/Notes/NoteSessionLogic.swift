@@ -114,6 +114,13 @@ enum NotePrompt {
     }
 }
 
+/// Unconfirmed words heard since a stream's last confirmed chunk, shown after the transcript while recording.
+struct NoteLivePreview: Equatable, Identifiable {
+    var speaker: Speaker?
+    var text: String
+    var id: String { speaker?.rawValue ?? "all" }
+}
+
 enum NoteSpeakers {
     /// Labels exist only while both streams are actually recording. A mic-only lecture is not "You".
     static func label(stream: NoteStream, bothLive: Bool) -> Speaker? {
@@ -182,6 +189,11 @@ struct NoteTranscriptState {
 
     func text(for stream: NoteStream) -> String {
         stream == .microphone ? micText : systemText
+    }
+
+    /// End of the last word committed from `stream`, in recording seconds.
+    func committedEnd(for stream: NoteStream) -> Double? {
+        stream == .microphone ? micCommittedEnd : systemCommittedEnd
     }
 
     func prompt(for stream: NoteStream, chunkDuration: Double) -> String? {

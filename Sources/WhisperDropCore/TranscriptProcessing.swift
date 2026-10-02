@@ -10,6 +10,10 @@ public struct ServerTranscription: Sendable {
         self.segments = segments; self.language = language
     }
     public var text: String { segments.map(\.text).joined(separator: " ") }
+    /// Every word with its time. A segment without word timing counts as one word.
+    public var timedWords: [TranscriptWord] {
+        segments.flatMap { segment in segment.words ?? [TranscriptWord(start: segment.start, end: segment.end, text: " " + segment.text)] }
+    }
 }
 
 public extension TranscriptOutput {

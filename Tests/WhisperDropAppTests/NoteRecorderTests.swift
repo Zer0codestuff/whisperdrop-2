@@ -199,3 +199,16 @@ final class NoteRecorderTests: XCTestCase {
         XCTAssertEqual(result.map(\.id), [0, 1, 2])
     }
 }
+
+final class NoteLivePreviewTests: XCTestCase {
+    func testPreviewSkipsWordsAlreadyCommittedFromTheOverlap() {
+        let words = [TranscriptWord(start: 10, end: 10.4, text: " già"), TranscriptWord(start: 10.5, end: 11, text: " detto"),
+                     TranscriptWord(start: 12, end: 12.5, text: " nuove"), TranscriptWord(start: 12.6, end: 13, text: " parole")]
+        let result = ServerTranscription(segments: [TranscriptSegment(id: 0, start: 10, end: 13, text: "già detto nuove parole", words: words)], language: "it")
+        var live = LiveText(start: 10)
+        live.accept(result.timedWords, window: 10..<13)
+        XCTAssertEqual(live.text, "già detto nuove parole")
+        live.discard(through: 11.5)
+        XCTAssertEqual(live.text, "nuove parole")
+    }
+}

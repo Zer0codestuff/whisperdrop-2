@@ -10,8 +10,8 @@ final class DictationHUD {
     private var subscription: AnyCancellable?
     private var hideTask: Task<Void, Never>?
     private var shown = false
-    /// Transparent host; the visible pill is centered inside and animates its own width.
-    private static let size = NSSize(width: 340, height: 52)
+    /// Transparent host; the visible bar sits at its bottom edge and grows upward with live text.
+    private static let size = NSSize(width: 580, height: 190)
 
     init(controller: DictationController) {
         self.controller = controller
@@ -50,8 +50,8 @@ final class DictationHUD {
         guard let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main else { return }
         let visible = screen.visibleFrame
         let size = Self.size
-        // Pill is 36 pt tall and centered, so its bottom edge sits 28 pt above the Dock.
-        let target = NSRect(x: (visible.midX - size.width / 2).rounded(), y: visible.minY + 28 - (size.height - 36) / 2,
+        // The bar's bottom edge sits 28 pt above the Dock.
+        let target = NSRect(x: (visible.midX - size.width / 2).rounded(), y: visible.minY + 28 - HUDView.bottomInset,
                             width: size.width, height: size.height)
         var panel = self.panel ?? makePanel()
         present(panel, at: target)
@@ -120,36 +120,50 @@ private final class HUDPanel: NSPanel {
 }
 
 private struct HUDView: View {
+    static let bottomInset: CGFloat = 8
     @ObservedObject var controller: DictationController
     var body: some View {
         let failure: String? = if case .failed(let message) = controller.state { message } else { nil }
         let listening = if case .listening = controller.state { true } else { false }
         let transcribing = controller.state == .transcribing
-        HStack(spacing: 10) {
-            if failure != nil {
-                Image(systemName: "exclamationmark.circle.fill").font(.system(size: 13)).foregroundStyle(.red)
-            } else {
-                LiveLevelBars(level: listening ? controller.level : 0, active: listening)
+        let words = failure == nil && listening ? Self.visibleTail(controller.barText) : ""
+        VStack(alignment: .leading, spacing: 6) {
+            if !words.isEmpty {
+                // Unconfirmed words. The newest stay visible; older ones scroll off the top.
+                Text(words).font(.system(size: 13)).lineSpacing(3).foregroundStyle(Color.white.opacity(0.82))
+                    .lineLimit(4).fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 10).padding(.horizontal, 2)
+                    .transition(.opacity)
             }
-            Text(failure ?? label).font(.system(size: 12, weight: .medium)).lineLimit(1).minimumScaleFactor(0.85)
-                .foregroundStyle(failure == nil ? Color.white : Color.red)
-                .contentTransition(.opacity)
-            Spacer(minLength: 0)
-            if listening {
-                Text("esc").font(.system(size: 11)).foregroundStyle(LivePalette.secondary).transition(.opacity)
-            }
+            HStack(spacing: 10) {
+                if failure != nil {
+                    Image(systemName: "exclamationmark.circle.fill").font(.system(size: 13)).foregroundStyle(.red)
+                } else {
+                    LiveLevelBars(level: listening ? controller.level : 0, active: listening)
+                }
+                Text(failure ?? label).font(.system(size: 12, weight: .medium)).lineLimit(1).minimumScaleFactor(0.85)
+                    .foregroundStyle(failure == nil ? (words.isEmpty ? Color.white : LivePalette.secondary) : Color.red)
+                    .contentTransition(.opacity)
+                Spacer(minLength: 0)
+                if listening {
+                    Text("esc").font(.system(size: 11)).foregroundStyle(LivePalette.secondary).transition(.opacity)
+                }
+            }.frame(height: 36)
         }
-        .padding(.horizontal, 12)
-        .frame(width: failure == nil ? 220 : 300, height: 36)
-        .background(Color.black, in: Capsule())
+        .padding(.horizontal, 14)
+        .frame(width: words.isEmpty ? (failure != nil ? 360 : 220) : 520)
+        .background(Color.black, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(alignment: .bottom) {
             if transcribing { SweepBar().padding(.horizontal, 18).padding(.bottom, 3).transition(.opacity) }
         }
-        .overlay(Capsule().strokeBorder(LivePalette.line))
-        .clipShape(Capsule())
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(LivePalette.line))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .animation(.easeOut(duration: 0.16), value: failure == nil)
+        .animation(.easeOut(duration: 0.16), value: words.isEmpty)
         .animation(.easeInOut(duration: 0.12), value: label)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .padding(.bottom, Self.bottomInset)
         .preferredColorScheme(.dark)
         .accessibilityElement(children: .combine)
     }
@@ -160,6 +174,13 @@ private struct HUDView: View {
         case .idle: "Done"
         case .failed(let message): message
         }
+    }
+    /// About four lines of the newest words, cut at a word.
+    static func visibleTail(_ text: String, limit: Int = 260) -> String {
+        guard text.count > limit else { return text }
+        let tail = text.suffix(limit)
+        let start = tail.firstIndex(of: " ").map { tail.index(after: $0) } ?? tail.startIndex
+        return "…" + tail[start...]
     }
 }
 

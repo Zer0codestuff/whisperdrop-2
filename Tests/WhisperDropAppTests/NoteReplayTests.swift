@@ -26,7 +26,7 @@ final class NoteReplayTests: XCTestCase {
         let startSeconds = Double(env["WHISPERDROP_REPLAY_START"] ?? "0") ?? 0
         let duration = Double(env["WHISPERDROP_REPLAY_DURATION"] ?? "inf") ?? .infinity
         let host = ModelHost(tool: { root.appendingPathComponent(".runtime/bin/\($0)") },
-                             modelFile: { models.appendingPathComponent($0.filename) },
+                             modelFile: { $0.location(in: models) },
                              processFile: URL(fileURLWithPath: output + ".pid"), preserveWords: !legacy)
         defer { host.shutdown() }
         let loadStart = Date()

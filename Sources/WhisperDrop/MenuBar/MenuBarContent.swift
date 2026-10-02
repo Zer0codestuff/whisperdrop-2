@@ -48,9 +48,10 @@ struct MenuBarContent: View {
         .background(WindowReader(window: $panel))
         .preferredColorScheme(.dark)
         .tint(LivePalette.green)
-        .onChange(of: settings.keepReady) { _, on in
-            host.keepReady = on
-            if on, store.downloaded.contains(settings.liveModel) { host.prewarm(settings.model) }
+        .onChange(of: settings.residency) { _, value in
+            host.residency = value
+            host.keepReady = settings.keepReady
+            if settings.keepReady { LiveModels.prewarm(settings: settings, store: store, host: host) }
         }
     }
 

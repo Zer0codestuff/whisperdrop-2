@@ -9,19 +9,46 @@ final class ModelHostTests: XCTestCase {
         executionTimeAllowance = 240
     }
 
-    func testAudioContextRoundsUpToAMultipleOf64() {
-        // 0 s -> 160 frames, which is not a multiple of 64, so the next step is 192.
-        XCTAssertEqual(ModelHost.audioContext(duration: 0), 192)
-        // 1 s -> 210 frames, ceil to 256.
-        XCTAssertEqual(ModelHost.audioContext(duration: 1), 256)
-        // 5 s -> 410 frames, ceil to 448. Above the measured-good window of 384.
-        XCTAssertEqual(ModelHost.audioContext(duration: 5), 448)
-        // 25 s -> 1410 frames, ceil to 1472, still under the 1500 encoder cap.
-        XCTAssertEqual(ModelHost.audioContext(duration: 25), 1472)
-        // Past the model's n_audio_ctx the formula caps at 1500.
-        XCTAssertEqual(ModelHost.audioContext(duration: 40), 1500)
-        XCTAssertEqual(ModelHost.audioContext(duration: 5) % 64, 0)
-        XCTAssertEqual(ModelHost.audioContext(duration: 25) % 64, 0)
+    func testUnsupportedLanguageStopsBeforeStartingAModel() async throws {
+        let pidFile = FileManager.default.temporaryDirectory.appendingPathComponent("WhisperDrop-host-test-\(UUID().uuidString).pid")
+        var launched = false
+        let host = ModelHost(tool: { _ in launched = true; return URL(fileURLWithPath: "/usr/bin/true") },
+                             modelFile: { _ in URL(fileURLWithPath: "/tmp") }, processFile: pidFile)
+        defer { host.shutdown() }
+        let parakeet = try XCTUnwrap(TranscriptionModel.catalog.first { $0.engine == .parakeet })
+        do {
+            _ = try await host.transcribe([0, 0, 0], model: parakeet, language: "ja", shortClip: true)
+            XCTFail("Japanese should be refused for Parakeet")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "Parakeet v3 does not transcribe Japanese. Choose a Whisper model in Settings.")
+        }
+        XCTAssertFalse(launched)
+        XCTAssertEqual(host.state, .unloaded)
+    }
+
+    /// Opt-in: one host switches between Whisper and Parakeet and back. Needs both models in WHISPERDROP_ENGINE_MODELS.
+    func testHostSwitchesEngines() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let folder = env["WHISPERDROP_ENGINE_MODELS"], let clip = env["WHISPERDROP_ENGINE_CLIP"] else {
+            throw XCTSkip("Set WHISPERDROP_ENGINE_MODELS and WHISPERDROP_ENGINE_CLIP to switch engines")
+        }
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let models = URL(fileURLWithPath: folder)
+        let host = ModelHost(tool: { repo.appendingPathComponent(".runtime/bin/\($0)") }, modelFile: { $0.location(in: models) },
+                             processFile: FileManager.default.temporaryDirectory.appendingPathComponent("WhisperDrop-switch-\(UUID().uuidString).pid"))
+        defer { host.shutdown() }
+        let samples = try XCTUnwrap(WAVDecoder.pcm16(Data(contentsOf: URL(fileURLWithPath: clip)))).samples
+        var texts: [String: String] = [:]
+        for id in ["turbo", "parakeet-v3", "turbo", "parakeet-v3"] {
+            let model = try XCTUnwrap(TranscriptionModel.catalog.first { $0.id == id })
+            let begin = Date()
+            let result = try await host.transcribe(samples, model: model, language: "it", shortClip: true)
+            XCTAssertEqual(host.loadedModel, id)
+            XCTAssertFalse(result.text.isEmpty)
+            if let previous = texts[id] { XCTAssertEqual(previous, result.text) }
+            texts[id] = result.text
+            print("switch \(id): \(String(format: "%.2f", Date().timeIntervalSince(begin))) s, \(result.text)")
+        }
     }
 
     func testMissingModelSurfacesTheClosureError() async throws {
@@ -73,7 +100,7 @@ final class ModelHostTests: XCTestCase {
         }
         let wavURL = URL(fileURLWithPath: "/private/tmp/grok-orchestrator-gabrielemonni/runs/20260929-161838-wispr-features/research/s5.wav")
         try XCTSkipUnless(FileManager.default.isReadableFile(atPath: wavURL.path), "s5.wav is missing")
-        let model = try XCTUnwrap(TranscriptionModel.catalog.first { $0.filename == modelURL.lastPathComponent })
+        let model = try XCTUnwrap(TranscriptionModel.catalog.first { $0.storageName == modelURL.lastPathComponent })
         let samples = try decodePCM16WAV(Data(contentsOf: wavURL))
         XCTAssertEqual(samples.count, 80_000)
 
@@ -168,9 +195,10 @@ final class ModelHostTests: XCTestCase {
         let plain = fields(ModelHost.multipart(boundary: "b", wav: Data(), language: "it", prompt: nil, audioContext: 512, preserveWords: true))
         XCTAssertFalse(plain.contains("no_timestamps"))
         XCTAssertTrue(plain.contains("name=\"temperature\"\r\n\r\n0.0\r\n"))
-        let dictation = fields(ModelHost.multipart(boundary: "b", wav: Data(), language: "it", prompt: nil, audioContext: 512, preserveWords: true,
+        let dictation = fields(ModelHost.multipart(boundary: "b", wav: Data(), language: "it", prompt: nil, audioContext: nil, preserveWords: true,
                                                    noTimestamps: true, temperature: 0.2))
         XCTAssertTrue(dictation.contains("name=\"no_timestamps\"\r\n\r\ntrue\r\n"))
+        XCTAssertFalse(dictation.contains("name=\"audio_ctx\""))
         XCTAssertTrue(dictation.contains("name=\"temperature\"\r\n\r\n0.2\r\n"))
     }
 }

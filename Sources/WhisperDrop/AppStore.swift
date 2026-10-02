@@ -7,9 +7,6 @@ import WhisperDropCore
 final class AppStore: ObservableObject {
     @Published var jobs: [TranscriptionJob] = []
     @Published var selection: UUID?
-    @Published var selectedModel = "turbo" {
-        didSet { preferences.set(selectedModel, forKey: "model") }
-    }
     @Published var busy = false
     @Published var importing = false
     @Published var status = "Ready"
@@ -19,7 +16,6 @@ final class AppStore: ObservableObject {
     @Published var downloadingModel: String?
     @Published var modelProgress = 0.0
     @Published var diagnostics = ""
-    @Published var showModels = false
     @Published var showLink = false
     @Published var showDiagnostics = false
     @Published private(set) var savedFolder: URL
@@ -28,11 +24,13 @@ final class AppStore: ObservableObject {
     private var importWork: Task<Void, Never>?
     private var modelWork: Task<Void, Never>?
     private let runner = CommandRunner()
-    private let preferences: UserDefaults
+    private var fileHost: ModelHost?
     let root: URL
     var canMoveSavedFiles: () -> Bool = { true }
     var audioBoostEnabled: () -> Bool = { true }
     var spokenLanguage: () -> String = { "auto" }
+    /// The file model chosen in Settings, Models.
+    var fileModel: () -> TranscriptionModel = { TranscriptionModel.catalog.first { $0.id == "turbo" }! }
     let modelsFolder: URL
     var outputFolder: URL { savedFolder.appendingPathComponent("Transcripts", isDirectory: true) }
     var audioFolder: URL { savedFolder.appendingPathComponent("Audio", isDirectory: true) }
@@ -41,12 +39,11 @@ final class AppStore: ObservableObject {
     private var libraryReadable = true
     private var pendingPreviousFolder: URL?
     var current: TranscriptionJob? { jobs.first { $0.id == selection } }
-    var model: TranscriptionModel { TranscriptionModel.catalog.first { $0.id == selectedModel } ?? TranscriptionModel.catalog[4] }
+    var model: TranscriptionModel { fileModel() }
     var queuedCount: Int { jobs.filter { $0.status == .queued }.count }
     static let languages: [(String, String)] = [("auto", "Detect language"), ("it", "Italian"), ("en", "English"), ("es", "Spanish"), ("fr", "French"), ("de", "German"), ("pt", "Portuguese"), ("ja", "Japanese"), ("zh", "Chinese"), ("ko", "Korean"), ("ru", "Russian"), ("ar", "Arabic"), ("nl", "Dutch"), ("pl", "Polish"), ("uk", "Ukrainian"), ("tr", "Turkish")]
 
     init(root: URL? = nil) {
-        preferences = root == nil ? .standard : UserDefaults(suiteName: "io.github.zer0codestuff.whisperdrop2.verification")!
         self.root = root ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("WhisperDrop 2")
         modelsFolder = self.root.appendingPathComponent("Models")
         savedFolder = root.map { $0.appendingPathComponent("Saved", isDirectory: true) }
@@ -77,7 +74,6 @@ final class AppStore: ObservableObject {
                 }
             }
         } catch { self.error = "Could not load the library: \(error.localizedDescription)" }
-        selectedModel = preferences.string(forKey: "model") ?? "turbo"
         selection = jobs.first?.id
         refreshModels()
     }
@@ -130,10 +126,12 @@ final class AppStore: ObservableObject {
         } catch { self.error = "Could not move saved files: \(error.localizedDescription)" }
     }
     func refreshModels() {
-        downloaded = Set(TranscriptionModel.catalog.filter {
-            let path = modelsFolder.appendingPathComponent($0.filename)
-            let size = (try? FileManager.default.attributesOfItem(atPath: path.path)[.size] as? NSNumber)?.int64Value
-            return size == $0.bytes
+        downloaded = Set(TranscriptionModel.catalog.filter { model in
+            model.files.allSatisfy { file in
+                let path = model.fileLocation(file, in: modelsFolder)
+                let size = (try? FileManager.default.attributesOfItem(atPath: path.path)[.size] as? NSNumber)?.int64Value
+                return size == file.bytes
+            }
         }.map(\.id))
     }
     func chooseFiles() {
@@ -209,6 +207,23 @@ final class AppStore: ObservableObject {
         if let index = jobs.firstIndex(where: { $0.id == id }) { block(&jobs[index]) }
     }
     func retry(_ id: UUID) { guard !movingSavedFiles else { return }; update(id) { $0.status = .queued; $0.error = nil }; save() }
+    func canRenameNote(_ job: TranscriptionJob) -> Bool {
+        libraryReadable && !movingSavedFiles && job.resolvedKind == .note && job.status == .completed
+    }
+    /// Commit the title before publishing it. Recording and transcript paths remain tied to the note's ID.
+    func renameNote(_ id: UUID, to title: String) throws {
+        guard let index = jobs.firstIndex(where: { $0.id == id }), canRenameNote(jobs[index]) else {
+            throw AppFailure("This note cannot be renamed right now.")
+        }
+        let name = title.components(separatedBy: .newlines).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { throw AppFailure("Enter a name for the note.") }
+        guard name != jobs[index].title else { return }
+        var renamed = jobs
+        renamed[index].title = name
+        try JSONEncoder().encode(LibrarySnapshot(savedFolder: savedFolder, jobs: renamed, pendingPreviousFolder: pendingPreviousFolder))
+            .write(to: historyURL, options: .atomic)
+        jobs = renamed
+    }
     func remove(_ id: UUID) {
         guard !movingSavedFiles, let job = jobs.first(where: { $0.id == id }), !job.status.isActive else { return }
         jobs.removeAll { $0.id == id }
@@ -224,14 +239,17 @@ final class AppStore: ObservableObject {
         let ids = jobs.filter { $0.status == .queued }.map(\.id)
         busy = true; diagnostics = ""; progress = 0
         work = Task {
-            defer { busy = false; status = "Ready"; progress = 0; work = nil; save() }
+            defer { busy = false; status = "Ready"; progress = 0; work = nil; fileHost?.unload(); save() }
             do {
+                guard chosenModel.supports(language: chosenLanguage) else {
+                    throw AppFailure("\(chosenModel.name) does not transcribe \(LiveFormat.language(chosenLanguage)). Choose a Whisper model in Settings, Models.")
+                }
                 let modelURL = try await ensureModel(chosenModel)
                 for id in ids {
                     try Task.checkCancellation()
                     guard let job = jobs.first(where: { $0.id == id && $0.status == .queued }) else { continue }
                     selection = id
-                    do { try await transcribe(job, modelURL: modelURL, modelName: chosenModel.name, language: chosenLanguage, audioBoost: chosenBoost) }
+                    do { try await transcribe(job, model: chosenModel, modelURL: modelURL, language: chosenLanguage, audioBoost: chosenBoost) }
                     catch is CancellationError { update(id) { $0.status = .cancelled }; throw CancellationError() }
                     catch { update(id) { $0.status = .failed; $0.error = error.localizedDescription }; save() }
                 }
@@ -249,37 +267,46 @@ final class AppStore: ObservableObject {
     func cancelModelDownload() { modelWork?.cancel(); if busy { work?.cancel() } }
     func deleteModel(_ model: TranscriptionModel) {
         guard !busy, downloadingModel == nil else { return }
-        do { try FileManager.default.removeItem(at: modelsFolder.appendingPathComponent(model.filename)); refreshModels() }
+        if model.engine == .parakeet { fileHost?.unload() }
+        do { try FileManager.default.removeItem(at: model.location(in: modelsFolder)); refreshModels() }
         catch { self.error = error.localizedDescription }
     }
+    /// Downloads and verifies every file of `model`. Returns the Whisper weights file or the model folder.
     func ensureModel(_ model: TranscriptionModel) async throws -> URL {
-        let target = modelsFolder.appendingPathComponent(model.filename)
         downloadingModel = model.id; modelProgress = 0
         defer { downloadingModel = nil; refreshModels() }
-        if downloaded.contains(model.id) {
+        if model.engine != .whisper {
+            try FileManager.default.createDirectory(at: model.location(in: modelsFolder), withIntermediateDirectories: true)
+        }
+        var done: Int64 = 0
+        for file in model.files {
+            let target = model.fileLocation(file, in: modelsFolder)
+            let size = (try? FileManager.default.attributesOfItem(atPath: target.path)[.size] as? NSNumber)?.int64Value
+            if size == file.bytes {
+                status = "Checking \(model.name)"
+                let hash = try await Task.detached { try sha256File(target) }.value
+                try Task.checkCancellation()
+                if hash == file.sha256 { done += file.bytes; continue }
+            }
+            if FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: target) }
+            status = "Downloading \(model.name)"
+            let start = Double(done) / Double(model.bytes), share = Double(file.bytes) / Double(model.bytes)
+            let transfer = ModelTransfer { [weak self] fraction in
+                Task { @MainActor in self?.modelProgress = start + fraction * share }
+            }
+            let temporary = try await transfer.download(file.url)
+            defer { try? FileManager.default.removeItem(at: temporary) }
             status = "Checking \(model.name)"
-            let hash = try await Task.detached { try sha256File(target) }.value
+            let hash = try await Task.detached { try sha256File(temporary) }.value
             try Task.checkCancellation()
-            if hash == model.sha256 { return target }
-            try FileManager.default.removeItem(at: target)
-            downloaded.remove(model.id)
+            guard hash == file.sha256 else { throw AppFailure("Model verification failed. The file was not installed. Please download it again.") }
+            try FileManager.default.moveItem(at: temporary, to: target)
+            done += file.bytes
         }
-        status = "Downloading \(model.name)"
-        let transfer = ModelTransfer { [weak self] fraction in
-            Task { @MainActor in self?.modelProgress = fraction }
-        }
-        let temporary = try await transfer.download(model.url)
-        defer { try? FileManager.default.removeItem(at: temporary) }
-        status = "Checking \(model.name)"
-        let hash = try await Task.detached { try sha256File(temporary) }.value
-        try Task.checkCancellation()
-        guard hash == model.sha256 else { throw AppFailure("Model verification failed. The file was not installed. Please download it again.") }
-        if FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: target) }
-        try FileManager.default.moveItem(at: temporary, to: target)
-        return target
+        return model.location(in: modelsFolder)
     }
     func log(_ text: String) { diagnostics = String((diagnostics + text).suffix(30000)) }
-    func transcribe(_ job: TranscriptionJob, modelURL: URL, modelName: String, language: String, audioBoost: Bool = true) async throws {
+    func transcribe(_ job: TranscriptionJob, model: TranscriptionModel, modelURL: URL, language: String, audioBoost: Bool = true) async throws {
         let temp = root.appendingPathComponent("Work/\(job.id.uuidString)")
         try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: temp) }
@@ -312,8 +339,38 @@ final class AppStore: ObservableObject {
                 inferenceAudio = destination
             }
         }
-        status = "Transcribing with \(modelName)"; update(job.id) { $0.status = .transcribing; $0.modelName = modelName }; save()
-        let output = temp.appendingPathComponent("transcript")
+        status = "Transcribing with \(model.name)"; update(job.id) { $0.status = .transcribing; $0.modelName = model.name }; save()
+        var segments: [TranscriptSegment]
+        switch model.engine {
+        case .whisper:
+            let result = try await whisperSegments(modelURL: modelURL, inferenceAudio: inferenceAudio, originalAudio: audio,
+                                                   output: temp.appendingPathComponent("transcript"), language: language)
+            segments = result.segments
+            warning = result.warning ?? warning
+        case .parakeet:
+            segments = try await parakeetSegments(model: model, audio: inferenceAudio, language: language)
+        }
+        if SilenceGuard.needsCheck(segments) {
+            do {
+                let activity: [SpeechRange]
+                if let speech { activity = speech }
+                else { activity = try await SpeechActivityDetector.ranges(file: audio, executable: tool("whisper-vad-speech-segments")) }
+                segments = SilenceGuard.filter(segments, speech: activity)
+            } catch is CancellationError { throw CancellationError() }
+            catch { warning = "The silence check was unavailable. Short closing phrases may need review." }
+        }
+        segments = HallucinationFilter.clean(segments, removeNeighborRepeats: false, preserveShortClosings: true)
+        let transcript = segments.map(\.text).joined(separator: "\n")
+        let archive = outputFolder.appendingPathComponent(job.id.uuidString)
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+        try transcript.write(to: archive.appendingPathComponent("transcript.txt"), atomically: true, encoding: .utf8)
+        try TranscriptOutput.subtitles(segments, vtt: false).write(to: archive.appendingPathComponent("transcript.srt"), atomically: true, encoding: .utf8)
+        try TranscriptOutput.subtitles(segments, vtt: true).write(to: archive.appendingPathComponent("transcript.vtt"), atomically: true, encoding: .utf8)
+        update(job.id) { $0.status = .completed; $0.transcript = transcript; $0.segments = segments; $0.error = warning }
+        progress = 1; save()
+    }
+    private func whisperSegments(modelURL: URL, inferenceAudio: URL, originalAudio: URL, output: URL, language: String) async throws -> (segments: [TranscriptSegment], warning: String?) {
+        var warning: String?
         let arguments = ["--model", modelURL.path, "--file", inferenceAudio.path, "--language", language, "--output-json", "--output-txt", "--output-file", output.path, "--print-progress", "--threads", String(min(6, max(2, ProcessInfo.processInfo.activeProcessorCount - 2))) ]
         var result = try await runner.run(tool("whisper-cli"), arguments) { [weak self] text in
             self?.log(text)
@@ -338,7 +395,7 @@ final class AppStore: ObservableObject {
             status = "Checking a repeated passage"
             log("\nSustained repetition detected. Retrying original audio without previous text context.\n")
             var retryArguments = arguments
-            if let fileIndex = retryArguments.firstIndex(of: "--file") { retryArguments[fileIndex + 1] = audio.path }
+            if let fileIndex = retryArguments.firstIndex(of: "--file") { retryArguments[fileIndex + 1] = originalAudio.path }
             retryArguments += ["--max-context", "0"]
             do {
                 let retry = try await runner.run(tool("whisper-cli"), retryArguments, progress: log)
@@ -351,25 +408,45 @@ final class AppStore: ObservableObject {
                 warning = "Some passages contain repeated text and need review."
             }
         }
-        if SilenceGuard.needsCheck(segments) {
-            do {
-                let activity: [SpeechRange]
-                if let speech { activity = speech }
-                else { activity = try await SpeechActivityDetector.ranges(file: audio, executable: tool("whisper-vad-speech-segments")) }
-                segments = SilenceGuard.filter(segments, speech: activity)
-            } catch is CancellationError { throw CancellationError() }
-            catch { warning = "The silence check was unavailable. Short closing phrases may need review." }
-        }
-        segments = HallucinationFilter.clean(segments, removeNeighborRepeats: false, preserveShortClosings: true)
-        let transcript = segments.map(\.text).joined(separator: "\n")
-        let archive = outputFolder.appendingPathComponent(job.id.uuidString)
-        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
-        try transcript.write(to: archive.appendingPathComponent("transcript.txt"), atomically: true, encoding: .utf8)
-        try TranscriptOutput.subtitles(segments, vtt: false).write(to: archive.appendingPathComponent("transcript.srt"), atomically: true, encoding: .utf8)
-        try TranscriptOutput.subtitles(segments, vtt: true).write(to: archive.appendingPathComponent("transcript.vtt"), atomically: true, encoding: .utf8)
-        update(job.id) { $0.status = .completed; $0.transcript = transcript; $0.segments = segments; $0.error = warning }
-        progress = 1; save()
+        return (segments, warning)
     }
+    /// Parakeet is graded on utterances of about 30 seconds, so the file goes to the model in pause-aligned windows.
+    private func parakeetSegments(model: TranscriptionModel, audio: URL, language: String) async throws -> [TranscriptSegment] {
+        let host = parakeetFileHost()
+        let file = try PCM16WAVFile(url: audio)
+        let rms = try file.blockRMS()
+        let windows = LongAudioPlan.windows(blockRMS: rms, sampleCount: file.sampleCount, sampleRate: file.sampleRate)
+        log("\n\(model.name): \(windows.count) windows for \(String(format: "%.1f", Double(file.sampleCount) / Double(file.sampleRate))) s of audio.\n")
+        let started = Date()
+        var segments: [TranscriptSegment] = []
+        for window in windows {
+            try Task.checkCancellation()
+            let samples = try file.read(window)
+            let offset = Double(window.lowerBound) / Double(file.sampleRate)
+            let result = try await host.transcribe(samples, model: model, language: language, offset: offset, checkSilence: false)
+            segments += result.segments
+            progress = Double(window.upperBound) / Double(max(1, file.sampleCount))
+        }
+        log(String(format: "%@ finished in %.1f s.\n", model.name, Date().timeIntervalSince(started)))
+        return segments.enumerated().map { index, segment in var segment = segment; segment.id = index; return segment }
+    }
+    /// File transcription keeps its own model process, so a note on another model is never unloaded mid-recording.
+    private func parakeetFileHost() -> ModelHost {
+        if let fileHost { return fileHost }
+        let host = ModelHost(tool: { [weak self] name in
+            guard let self else { throw AppFailure("WhisperDrop is quitting.") }
+            return try self.tool(name)
+        }, modelFile: { [modelsFolder] model in
+            let location = model.location(in: modelsFolder)
+            guard FileManager.default.fileExists(atPath: location.path) else { throw AppFailure("Download the \(model.name) model in Settings, Models first.") }
+            return location
+        }, processFile: root.appendingPathComponent("parakeet-files.pid"))
+        host.residency = .twoMinutes
+        fileHost = host
+        return host
+    }
+    /// Stops the file transcription model process. Call when the app quits.
+    func shutdownEngines() { fileHost?.shutdown() }
     func copyTranscript() {
         guard let job = current else { return }
         NSPasteboard.general.clearContents(); NSPasteboard.general.setString(transcriptText(job), forType: .string)

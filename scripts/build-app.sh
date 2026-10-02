@@ -5,12 +5,16 @@ for tool in whisper-cli whisper-server whisper-vad-speech-segments ffmpeg yt-dlp
   [[ -x ".runtime/bin/$tool" ]] || { echo 'Run scripts/prepare-runtime.sh first.' >&2; exit 1; }
 done
 [[ -f .runtime/models/ggml-silero-v6.2.0.bin ]] || { echo 'Run scripts/prepare-runtime.sh first.' >&2; exit 1; }
+[[ -f .runtime/bin/mlx.metallib && -f .runtime/bin/Resources/mlx.metallib ]] || { echo 'Run scripts/prepare-mlx.sh first.' >&2; exit 1; }
 swift build -c release --arch arm64
 app='dist/WhisperDrop 2.app'
+# A fresh bundle: binaries copied over older ones in place keep a stale cached signature.
+rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/Runtime/bin" "$app/Contents/Resources/Runtime/licenses" "$app/Contents/Resources/Runtime/models"
 binary_dir="$(swift build -c release --arch arm64 --show-bin-path)"
 cp "$binary_dir/WhisperDrop" "$app/Contents/MacOS/WhisperDrop"
-cp .runtime/bin/* "$app/Contents/Resources/Runtime/bin/"
+cp -R .runtime/bin/. "$app/Contents/Resources/Runtime/bin/"
+cp "$binary_dir/parakeet-server" "$app/Contents/Resources/Runtime/bin/parakeet-server"
 cp .runtime/licenses/* "$app/Contents/Resources/Runtime/licenses/"
 cp .runtime/models/ggml-silero-v6.2.0.bin "$app/Contents/Resources/Runtime/models/"
 cp docs/third-party.md "$app/Contents/Resources/Runtime/NOTICE.md"
@@ -23,8 +27,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>WhisperDrop 2</string>
 <key>CFBundleDisplayName</key><string>WhisperDrop 2</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>2.3.0</string>
-<key>CFBundleVersion</key><string>5</string>
+<key>CFBundleShortVersionString</key><string>2.5.0</string>
+<key>CFBundleVersion</key><string>7</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
 <key>NSHighResolutionCapable</key><true/>
@@ -56,6 +60,8 @@ elif security find-identity -p codesigning | grep -F '"WhisperDrop 2 Local"' >/d
 fi
 echo "Signing identity: ${identity}"
 for tool in "$app/Contents/Resources/Runtime/bin/"*; do
+  # Shader libraries are resources sealed by the app signature, not code.
+  [[ -f "$tool" && -x "$tool" ]] || continue
   codesign --force --sign "$identity" "$tool"
 done
 codesign --force --sign "$identity" "$app"

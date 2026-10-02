@@ -16,6 +16,7 @@ struct ContentView: View {
     @EnvironmentObject private var settings: AppSettings
     @AppStorage("guideDone") private var guideDone = false
     @State private var targeted = false
+    @State private var renamingNote: TranscriptionJob?
     var body: some View {
         HStack(spacing: 0) {
             sidebar.frame(width: 262)
@@ -50,9 +51,9 @@ struct ContentView: View {
             }
             return !providers.isEmpty
         }
-        .sheet(isPresented: $store.showModels) { ModelsView().environmentObject(store) }
         .sheet(isPresented: $store.showLink) { LinkView().environmentObject(store) }
         .sheet(isPresented: $store.showDiagnostics) { diagnostics }
+        .sheet(item: $renamingNote) { note in RenameNoteView(note: note).environmentObject(store) }
         .overlay {
             if !guideDone {
                 ZStack {
@@ -111,6 +112,9 @@ struct ContentView: View {
                                 .contentShape(Rectangle())
                         }.buttonStyle(.plain)
                             .contextMenu {
+                                if job.resolvedKind == .note {
+                                    Button("Rename…") { renamingNote = job }.disabled(!store.canRenameNote(job))
+                                }
                                 if job.status == .failed || job.status == .cancelled { Button("Try again") { store.retry(job.id) } }
                                 Button("Remove from library", role: .destructive) { store.remove(job.id) }.disabled(job.status.isActive)
                             }
@@ -128,9 +132,10 @@ struct ContentView: View {
                 }.padding(20)
             }
             VStack(alignment: .leading, spacing: 18) {
-                Button { store.showModels = true } label: {
-                    HStack { Image(systemName: "square.stack.3d.up"); Text("Models"); Spacer(); Text("\(store.downloaded.count)").foregroundStyle(Palette.secondary) }
-                }.buttonStyle(.plain).font(.system(size: 13))
+                OpenModelsButton {
+                    HStack { Image(systemName: "square.stack.3d.up"); Text("Models"); Spacer(); Text(settings.model.name).foregroundStyle(Palette.secondary) }
+                        .contentShape(Rectangle())
+                }.buttonStyle(.plain).font(.system(size: 13)).help("Choose and download models in Settings")
                 SettingsLink {
                     HStack { Image(systemName: "gearshape"); Text("Settings"); Spacer() }
                 }.buttonStyle(.plain).font(.system(size: 13)).help("Open settings")
@@ -167,6 +172,11 @@ struct ContentView: View {
                     .font(.system(size: 11)).foregroundStyle(Palette.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
+            if let job = store.current, job.resolvedKind == .note {
+                Button("Rename…") { renamingNote = job }
+                    .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Palette.secondary)
+                    .disabled(!store.canRenameNote(job))
+            }
             if store.current?.status == .completed {
                 if let job = store.current, job.resolvedKind == .note, let audio = job.audioFile {
                     Button { NSWorkspace.shared.activateFileViewerSelecting(NoteAudio.savedFiles(in: audio)) } label: {
@@ -228,7 +238,7 @@ struct ContentView: View {
                     .font(.system(size: 35, weight: .ultraLight)).foregroundStyle(job.status == .failed ? .red : Palette.green)
                 Text(job.status.isActive ? store.status : job.status == .queued ? "Ready when you are." : job.status.label)
                     .font(.system(size: 24, weight: .medium))
-                Text(job.error ?? (job.status == .queued ? "Choose a model and language, then transcribe the queue." : job.status == .cancelled ? "You can queue this recording again." : "You can keep adding recordings while this one is processed."))
+                Text(job.error ?? (job.status == .queued ? "Check the language, then transcribe the queue." : job.status == .cancelled ? "You can queue this recording again." : "You can keep adding recordings while this one is processed."))
                     .font(.system(size: 13)).foregroundStyle(Palette.secondary).multilineTextAlignment(.center).frame(maxWidth: 390)
                 if job.status == .transcribing {
                     ProgressView(value: store.progress).frame(width: 240)
@@ -252,13 +262,14 @@ struct ContentView: View {
             HStack(spacing: 18) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Model").font(.system(size: 10)).foregroundStyle(Palette.secondary)
-                    Menu {
-                        ForEach(TranscriptionModel.catalog) { model in
-                            Button(model.name + (store.downloaded.contains(model.id) ? "" : " (download)")) { store.selectedModel = model.id }
-                        }
-                    } label: {
-                        HStack { Text(store.model.name); Spacer(); Image(systemName: "chevron.down").font(.system(size: 9)) }
-                    }.menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 112).disabled(store.busy)
+                    OpenModelsButton {
+                        HStack(spacing: 5) {
+                            Text(store.model.name).lineLimit(1)
+                            if !store.downloaded.contains(store.model.id) { Text("· download").foregroundStyle(Palette.secondary) }
+                            Image(systemName: "chevron.right").font(.system(size: 9)).foregroundStyle(Palette.secondary)
+                        }.contentShape(Rectangle())
+                    }.buttonStyle(.plain).font(.system(size: 13)).frame(minWidth: 112, alignment: .leading)
+                    .help("The model is chosen in Settings, Models")
                 }
                 Rectangle().fill(Palette.line).frame(width: 1, height: 28)
                 VStack(alignment: .leading, spacing: 4) {
@@ -295,6 +306,43 @@ struct ContentView: View {
             HStack { Text("Activity").font(.title2); Spacer(); Button("Done") { store.showDiagnostics = false } }
             ScrollView { Text(store.diagnostics.isEmpty ? "No activity yet." : store.diagnostics).font(.system(size: 11, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
         }.padding(28).frame(width: 680, height: 460)
+    }
+}
+
+private struct RenameNoteView: View {
+    @EnvironmentObject private var store: AppStore
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var nameFocused: Bool
+    @State private var name: String
+    @State private var failure: String?
+    let note: TranscriptionJob
+
+    init(note: TranscriptionJob) {
+        self.note = note
+        _name = State(initialValue: note.title)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Rename note").font(.system(size: 20, weight: .semibold))
+            TextField("Note name", text: $name).textFieldStyle(.roundedBorder)
+                .accessibilityLabel("Note name").focused($nameFocused).onSubmit(save)
+            if let failure { Text(failure).font(.system(size: 12)).foregroundStyle(.red) }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Save", action: save).keyboardShortcut(.defaultAction)
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }.padding(28).frame(width: 420)
+            .defaultFocus($nameFocused, true)
+    }
+
+    private func save() {
+        do {
+            try store.renameNote(note.id, to: name)
+            dismiss()
+        } catch { failure = "Could not rename the note: \(error.localizedDescription)" }
     }
 }
 
@@ -336,37 +384,5 @@ private struct LinkView: View {
             TextField("https://www.youtube.com/watch?v=…", text: $link).textFieldStyle(.roundedBorder).focused($focused).onSubmit { if MediaInput.youtubeURL(link) != nil { store.addYouTube(link) } }
             HStack { Spacer(); Button("Cancel") { store.showLink = false }.keyboardShortcut(.cancelAction); Button("Add to queue") { store.addYouTube(link) }.buttonStyle(GreenButton()).disabled(MediaInput.youtubeURL(link) == nil) }
         }.padding(32).frame(width: 470).onAppear { focused = true }
-    }
-}
-private struct ModelsView: View {
-    @EnvironmentObject private var store: AppStore
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack { Text("Models").font(.system(size: 26, weight: .medium)); Spacer(); Button("Done") { store.showModels = false }.keyboardShortcut(.cancelAction) }.padding(.bottom, 12)
-            Text("Download once. Transcribe offline.").font(.system(size: 13)).foregroundStyle(Palette.secondary).padding(.bottom, 24)
-            ForEach(TranscriptionModel.catalog) { model in
-                HStack(spacing: 20) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack(spacing: 8) { Text(model.name).font(.system(size: 14, weight: .semibold)); Text(model.size).font(.system(size: 11)).foregroundStyle(Palette.secondary) }
-                        Text(model.detail).font(.system(size: 12)).foregroundStyle(Palette.secondary)
-                        if store.downloadingModel == model.id {
-                            ProgressView(value: store.modelProgress).frame(width: 260)
-                        }
-                    }
-                    Spacer()
-                    if store.downloadingModel == model.id {
-                        Button("Cancel", action: store.cancelModelDownload).buttonStyle(.plain).foregroundStyle(Palette.green)
-                    } else if store.downloaded.contains(model.id) {
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.green).help("Downloaded")
-                        Button { store.deleteModel(model) } label: { Image(systemName: "trash").foregroundStyle(Palette.secondary) }.buttonStyle(.plain).disabled(store.busy || store.downloadingModel != nil).accessibilityLabel("Delete \(model.name)")
-                    } else {
-                        Button { store.downloadModel(model) } label: { Image(systemName: "arrow.down.circle").font(.system(size: 20)) }.buttonStyle(.plain).foregroundStyle(Palette.green).disabled(store.busy || store.downloadingModel != nil).accessibilityLabel("Download \(model.name)")
-                    }
-                }.padding(.vertical, 17)
-                Rectangle().fill(Palette.line).frame(height: 1)
-            }
-            Text("Whisper GGML · Q5 quantization, except Turbo Q8. Downloads are verified before installation.")
-                .font(.system(size: 11)).foregroundStyle(Palette.secondary).padding(.top, 20)
-        }.padding(32).frame(width: 570)
     }
 }

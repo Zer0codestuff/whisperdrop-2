@@ -171,6 +171,38 @@ public struct Chunker: Sendable {
         return nil
     }
 
+    /// The last `seconds` of audio that no chunk has taken yet, for a live preview. Never changes the chunker.
+    public func openTail(lastSeconds seconds: Double) -> AudioChunk? {
+        let count = min(pendingCount, sampleCount(for: seconds))
+        return openAudio(fromSample: pendingCount - count, count: count)
+    }
+
+    /// Recording time where the audio that no chunk has taken yet begins.
+    public var openStart: Double { Double(absoluteSample) / Double(whisperSampleRate) }
+    /// Recording time of the newest sample.
+    public var openEnd: Double { Double(absoluteSample + pendingCount) / Double(whisperSampleRate) }
+
+    /// Audio no chunk has taken yet inside `range` of recording time, for live text. Never changes the chunker.
+    public func openAudio(_ range: Range<Double>) -> AudioChunk? {
+        let first = max(0, min(pendingCount, Int((range.lowerBound * Double(whisperSampleRate)).rounded()) - absoluteSample))
+        let last = max(first, min(pendingCount, Int((range.upperBound * Double(whisperSampleRate)).rounded()) - absoluteSample))
+        return openAudio(fromSample: first, count: last - first)
+    }
+
+    private func openAudio(fromSample offset: Int, count: Int) -> AudioChunk? {
+        guard count > 0 else { return nil }
+        let from = head + offset
+        let firstFrame = (offset + Gate.frame - 1) / Gate.frame
+        let frames = min(framedSamples, offset + count) / Gate.frame
+        var speechFrames = 0
+        if firstFrame < frames {
+            for index in firstFrame..<frames where frameRMS[frameHead + index] >= options.speechRMS { speechFrames += 1 }
+        }
+        return AudioChunk(start: Double(absoluteSample + offset) / Double(whisperSampleRate),
+                          samples: Array(storage[from..<(from + count)]),
+                          hasSpeech: speechFrames * Gate.frame >= sampleCount(for: options.minimumSpeech))
+    }
+
     private mutating func drain(flush: Bool) -> [AudioChunk] {
         var emitted: [AudioChunk] = []
         var spins = 0

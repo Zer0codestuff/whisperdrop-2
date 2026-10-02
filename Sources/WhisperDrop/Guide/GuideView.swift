@@ -51,7 +51,7 @@ struct GuideView: View {
         VStack(alignment: .leading, spacing: 0) {
             LiveWaveMark(scale: 0.6).padding(.bottom, 22).accessibilityHidden(true)
             heading("Speech to text, on this Mac.",
-                    "WhisperDrop 2 transcribes with a Whisper model that runs locally. Nothing is uploaded, and once a model is downloaded it works offline.")
+                    "WhisperDrop 2 transcribes with a speech model that runs locally. Nothing is uploaded, and once a model is downloaded it works offline.")
             GuideRow(symbol: "mic", title: "Dictation", detail: "Hold a key, talk, and the text appears where your cursor is.", divider: false)
             GuideRow(symbol: "person.2.wave.2", title: "Notes", detail: "Record a lecture, call or meeting. The transcript builds while you listen.")
             GuideRow(symbol: "waveform", title: "Files and YouTube", detail: "Drop audio or video, or paste a link, and get a transcript you can export.")
@@ -81,7 +81,7 @@ struct GuideView: View {
                     ForEach(AppStore.languages, id: \.0) { Text($0.1).tag($0.0) }
                 }.labelsHidden().frame(width: 150)
             }
-            note("Other models are in Models, in the sidebar. The language is also in the menu bar and in Settings, General.")
+            note("Other models are in Settings, Models. You can also give dictation, notes or files their own model there. The language is also in the menu bar and in Settings, General.")
         }
     }
 
@@ -111,7 +111,7 @@ struct GuideView: View {
             GuideRow(symbol: "mic", title: "You", detail: "Your microphone.", divider: false)
             GuideRow(symbol: "speaker.wave.2", title: "Others", detail: "Sound from other apps, such as a video call or a recorded lesson.")
             GuideRow(symbol: "globe", title: "A different language once", detail: "Note language, beside New note, applies to the next note only. Then the app language returns.")
-            GuideRow(symbol: "waveform", title: "Keep audio", detail: "Saves the recording next to its transcript. When off, the audio is deleted after saving.")
+            GuideRow(symbol: "waveform", title: "Keep audio", detail: "Saves the recording in your Audio folder. When off, the audio is deleted after the transcript is saved.")
         }
     }
 

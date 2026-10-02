@@ -8,4 +8,5 @@ fi
 export WHISPERDROP_SESSION_AUDIO="$1"
 export WHISPERDROP_SESSION_REPORT="$2"
 export WHISPERDROP_SESSION_SPEED="${3:-1}"
+if [[ "${WHISPERDROP_SESSION_MODEL:-}" == parakeet* ]]; then scripts/stage-parakeet-server.sh; fi
 swift test --filter NoteSessionReplayTests/testRecordedSessionReplay

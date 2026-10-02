@@ -116,7 +116,9 @@ final class HotkeyMonitor {
                 cancelChord()
             }
         } else if raw == CGEventType.keyDown.rawValue {
-            guard event.getIntegerValueField(.keyboardEventAutorepeat) == 0 else {
+            // Live text typed by dictation itself is not a shortcut chord.
+            guard event.getIntegerValueField(.keyboardEventAutorepeat) == 0,
+                  event.getIntegerValueField(.eventSourceUserData) != LiveTextWriter.eventMarker else {
                 return Unmanaged.passUnretained(event)
             }
             let code = Self.keyCode(event)

@@ -93,6 +93,71 @@ final class SavedLibraryTests: XCTestCase {
         XCTAssertNil(store.error)
     }
 
+    func testRenamePersistsAndKeepsAudioAndTranscriptFiles() throws {
+        let root = folder.appendingPathComponent("AppData")
+        let store = AppStore(root: root)
+        let audio = store.audioFolder.appendingPathComponent("note/you.caf")
+        try write("original recording", at: audio)
+        var job = TranscriptionJob(source: store.outputFolder.appendingPathComponent("note"), title: "Old title")
+        job.kind = .note; job.status = .completed; job.audioFile = audio.deletingLastPathComponent()
+        job.segments = [TranscriptSegment(id: 0, start: 0, end: 1, text: "Saved words.")]
+        job.transcript = "Saved words."
+        store.addNote(job)
+        store.selection = job.id
+        let files = try FileManager.default.contentsOfDirectory(at: job.source, includingPropertiesForKeys: nil) + [audio]
+        let hashes = try files.map { try sha256File($0) }
+
+        try store.renameNote(job.id, to: "  Lesson 1  ")
+        XCTAssertEqual(store.current?.title, "Lesson 1")
+        XCTAssertEqual(store.current?.id, job.id)
+        XCTAssertEqual(store.current?.source, job.source)
+        XCTAssertEqual(store.current?.audioFile, job.audioFile)
+        XCTAssertEqual(store.current?.segments.map(\.text), job.segments.map(\.text))
+        XCTAssertEqual(store.current?.segments.map(\.start), job.segments.map(\.start))
+        XCTAssertEqual(store.current?.segments.map(\.end), job.segments.map(\.end))
+        XCTAssertEqual(try files.map { try sha256File($0) }, hashes)
+        let reopened = AppStore(root: root)
+        XCTAssertNil(reopened.error)
+        XCTAssertEqual(reopened.jobs.first?.title, "Lesson 1")
+        XCTAssertEqual(reopened.jobs.first?.audioFile, job.audioFile)
+        XCTAssertEqual(reopened.jobs.first?.transcript, job.transcript)
+    }
+
+    func testRenameWithoutAudioAndDuplicateTitlesKeepSeparateNotes() throws {
+        let store = AppStore(root: folder.appendingPathComponent("AppData"))
+        var first = TranscriptionJob(source: store.outputFolder.appendingPathComponent("first"), title: "First")
+        first.kind = .note; first.status = .completed
+        var second = first
+        second.id = UUID(); second.source = store.outputFolder.appendingPathComponent("second"); second.title = "Lesson 1"
+        store.addNote(first); store.addNote(second)
+        try store.renameNote(first.id, to: "Lesson 1")
+        XCTAssertEqual(store.jobs.map(\.title), ["Lesson 1", "Lesson 1"])
+        XCTAssertEqual(Set(store.jobs.map(\.id)).count, 2)
+        XCTAssertEqual(store.jobs.first?.source, second.source)
+        XCTAssertEqual(store.jobs.last?.source, first.source)
+        XCTAssertNil(store.jobs.last?.audioFile)
+        XCTAssertThrowsError(try store.renameNote(first.id, to: " \n\t "))
+        XCTAssertEqual(store.jobs.last?.title, "Lesson 1")
+        var file = TranscriptionJob(source: folder.appendingPathComponent("input.wav"))
+        file.status = .completed
+        store.jobs.append(file)
+        XCTAssertThrowsError(try store.renameNote(file.id, to: "A file"))
+        XCTAssertEqual(store.jobs.last?.title, file.title)
+    }
+
+    func testRenameFailureKeepsThePreviousTitle() throws {
+        let root = folder.appendingPathComponent("AppData")
+        let store = AppStore(root: root)
+        var job = TranscriptionJob(source: store.outputFolder.appendingPathComponent("note"), title: "Original")
+        job.kind = .note; job.status = .completed
+        store.addNote(job)
+        let history = root.appendingPathComponent("history.json")
+        try FileManager.default.removeItem(at: history)
+        try FileManager.default.createDirectory(at: history, withIntermediateDirectories: true)
+        XCTAssertThrowsError(try store.renameNote(job.id, to: "Lesson 1"))
+        XCTAssertEqual(store.jobs.first?.title, "Original")
+    }
+
     func testRestartFinishesAnInterruptedMoveAndKeepsUnrelatedFiles() throws {
         let root = folder.appendingPathComponent("AppData")
         let old = root.appendingPathComponent("Saved")
