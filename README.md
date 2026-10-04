@@ -49,6 +49,22 @@ Speech is processed on your Mac. There are no accounts, analytics, API keys or c
 
 Model downloads contact Hugging Face, and YouTube imports contact YouTube. Your notes, transcripts and kept recordings stay on your Mac. Original imported files are never overwritten.
 
+## How it compares
+
+| | WhisperDrop 2 | MacWhisper | Wispr Flow |
+| --- | --- | --- | --- |
+| Price | Free | Free version; Pro is €64 once | Free up to 2,000 words a week on desktop; Pro from US$12 per user a month |
+| Open source | Yes, MIT | No | No |
+| Speech processing | On the Mac | On the Mac | In the cloud |
+| Audio, video and YouTube | Yes, including playlists | Yes | Not listed |
+| Meeting recording | Microphone and system audio, labeled You and Others | Yes; automatic speaker recognition in Pro | Yes, with Notetaker |
+| Dictation into other apps | Yes | Yes; grammar cleanup in Pro | Yes |
+| Platforms | Apple Silicon Macs, macOS 14 or later | Mac | Mac, Windows, iOS, Android |
+
+MacWhisper Pro goes further with speaker recognition, translation, batch transcription and more export formats. Wispr Flow also runs on Windows and phones. WhisperDrop 2 runs only on Apple Silicon Macs, and its download is not notarized.
+
+Details for the other apps come from [MacWhisper](https://www.macwhisper.com/) and Wispr Flow's [pricing](https://wisprflow.ai/pricing) and [data controls](https://wisprflow.ai/data-controls) pages, checked in October 2026.
+
 ## Technical details
 
 ### Speech engine and models
