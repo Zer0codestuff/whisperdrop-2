@@ -6,7 +6,8 @@ permissions:
   contents: read
 jobs:
   core:
-    runs-on: macos-15
+    # mlx-swift 0.32.3 needs Swift 6.3 (Xcode 26.4 or later); the macos-15 image stops at Xcode 26.3.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - name: Select an Xcode with the macOS 26 SDK
@@ -26,5 +27,7 @@ jobs:
           PY
           )"
           sudo xcode-select -s "$xcode_path"
+          xcodebuild -version
+          swift --version
       - name: Test Swift package
         run: swift test
