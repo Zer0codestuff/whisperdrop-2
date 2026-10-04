@@ -93,7 +93,7 @@ Lecture notes wait for pauses, with a 60-second limit per request. Forced cuts r
 
 ### Build and run
 
-Building requires Xcode 26 or later, its command-line tools, CMake and a C/C++ toolchain. The macOS 26 SDK is needed for Liquid Glass controls; the app also runs on earlier supported systems with a solid fallback.
+Building requires Xcode 26.4 or later, its command-line tools, CMake and a C/C++ toolchain. mlx-swift needs Swift 6.3, which Xcode 26.3 and earlier do not include. The macOS 26 SDK is needed for Liquid Glass controls; the app also runs on earlier supported systems with a solid fallback.
 
 ```bash
 git clone https://github.com/Zer0codestuff/whisperdrop-2.git
