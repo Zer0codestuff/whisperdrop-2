@@ -5,3 +5,8 @@ dist/
 *.xcuserstate
 .swiftpm/
 .experiments/
+
+# Isolated browser experiment
+web/node_modules/
+web/dist/
+web/public/.verify-*

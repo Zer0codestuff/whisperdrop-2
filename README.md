@@ -8,6 +8,8 @@ Turn recordings, videos and meetings into text, right on your Mac. Record a lect
 
 [Download the latest version](https://github.com/Zer0codestuff/whisperdrop-2/releases/latest) · Apple Silicon · macOS 14 or later
 
+[Use WhisperDrop Web](https://whisperdrop-web-production.up.railway.app/) · Experimental · Hardware WebGPU required
+
 ## Features
 
 - Transcribe audio and video files. Drag them into the app or choose them with the file picker.
@@ -22,7 +24,15 @@ Turn recordings, videos and meetings into text, right on your Mac. Record a lect
 - Try Parakeet v3, an experimental engine that transcribes several times faster in 25 European languages. With it, dictation can write words into the text field while you speak, and notes show everything heard since the last confirmed paragraph.
 - Process speech locally. After downloading a model, you can transcribe local files, record notes and dictate offline.
 
-## Get started
+## Use it in your browser
+
+[WhisperDrop Web](https://whisperdrop-web-production.up.railway.app/) transcribes local files and microphone notes directly in your browser. It has a dark interface, a saved transcript library, optional note audio, and TXT, SRT and JSON export. Speech runs locally on your GPU through WebGPU. Railway hosts the website; audio and transcripts stay on your device.
+
+Use a current Chrome or Edge browser with hardware WebGPU. The default Whisper Turbo Q4F16 model downloads about 564 MB of weights on first use and caches them in your browser. Turbo also needs GPU float16 support; Base is a smaller option. Keep the page open while recording. Browser storage is separate from the Mac app and belongs to the current browser profile and site, so export recordings and transcripts you need to keep.
+
+The web version is experimental. It does not include the Mac app's global dictation, YouTube import or system audio capture. Recognition errors and browser recording limits remain; see the [browser evaluation](docs/web-evaluation.md) and [web implementation guide](web/README.md). A completely offline page reload is not guaranteed.
+
+## Get started on Mac
 
 1. Download the `.dmg` from the [latest release](https://github.com/Zer0codestuff/whisperdrop-2/releases/latest).
 2. Drag **WhisperDrop 2.app** into Applications. If you are updating, quit the old version first and replace it.
@@ -45,9 +55,11 @@ On first launch a short guide explains each feature and asks for the permissions
 
 ## Privacy
 
-Speech is processed on your Mac. There are no accounts, analytics, API keys or cloud transcription services.
+Speech is processed on your device, in the native Mac app or locally in the browser. There are no accounts, analytics, API keys or cloud transcription services.
 
 Model downloads contact Hugging Face, and YouTube imports contact YouTube. Your notes, transcripts and kept recordings stay on your Mac. Original imported files are never overwritten.
+
+The web version downloads its voice detector from GitHub and its speech weights from Hugging Face. Its transcript library, model cache and optional recordings stay in browser storage. Railway serves the application files and receives ordinary website requests, not your audio or transcripts.
 
 ## How it compares
 
@@ -59,9 +71,9 @@ Model downloads contact Hugging Face, and YouTube imports contact YouTube. Your 
 | Audio, video and YouTube | Yes, including playlists | Yes | Not listed |
 | Meeting recording | Microphone and system audio, labeled You and Others | Yes; automatic speaker recognition in Pro | Yes, with Notetaker |
 | Dictation into other apps | Yes | Yes; grammar cleanup in Pro | Yes |
-| Platforms | Apple Silicon Macs, macOS 14 or later | Mac | Mac, Windows, iOS, Android |
+| Platforms | Apple Silicon Macs, macOS 14 or later; experimental WebGPU web version | Mac | Mac, Windows, iOS, Android |
 
-MacWhisper Pro goes further with speaker recognition, translation, batch transcription and more export formats. Wispr Flow also runs on Windows and phones. WhisperDrop 2 runs only on Apple Silicon Macs, and its download is not notarized.
+MacWhisper Pro goes further with speaker recognition, translation, batch transcription and more export formats. Wispr Flow also runs on Windows and phones. The native WhisperDrop 2 app requires an Apple Silicon Mac, and its download is not notarized. The experimental web version covers local files and microphone notes in a browser with a supported GPU.
 
 Details for the other apps come from [MacWhisper](https://www.macwhisper.com/) and Wispr Flow's [pricing](https://wisprflow.ai/pricing) and [data controls](https://wisprflow.ai/data-controls) pages, checked in October 2026.
 
