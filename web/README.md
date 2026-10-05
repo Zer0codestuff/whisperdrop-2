@@ -53,7 +53,7 @@ Model files are cached for reuse. This experiment does not install a service wor
 
 The `whisperdrop-web` Railway service follows `Zer0codestuff/whisperdrop-2`, branch `main`, with root directory `/web`, Dockerfile `Dockerfile`, watch pattern `/web/**` and healthcheck `/healthz`. Changes under `web/` trigger a build. The multi-stage Docker image contains only Node.js, the compiled site and `server.mjs`; the runtime has no npm dependencies or speech models. The server binds `0.0.0.0` on Railway's `PORT` and serves the isolation headers above, correct WASM MIME, precompressed assets and immutable caching for hashed bundles. HTML and the capture worklet revalidate so new deployments remain reachable.
 
-The live URL is https://whisperdrop-web-production.up.railway.app/. GitHub's [Deployments page](https://github.com/Zer0codestuff/whisperdrop-2/deployments) records the deployed commit and live environment URL. The website origin has its own model cache and library; local-demo data does not migrate automatically. Hosting serves static files only, with inference and persistence still on the user's device.
+The live URL is https://whisperdrop-web-production.up.railway.app/. GitHub's [Deployments page](https://github.com/Zer0codestuff/whisperdrop-2/deployments) records the deployed commit and live environment URL. `.github/workflows/web-deployment.yml` changes Railway's dashboard link to the public site after each successful deployment, using the repository's built-in GitHub token. The website origin has its own model cache and library; local-demo data does not migrate automatically. Hosting serves static files only, with inference and persistence still on the user's device.
 
 ## Evidence
 

@@ -1,0 +1,27 @@
+name: Web deployment link
+on:
+  deployment_status:
+permissions:
+  deployments: write
+jobs:
+  link:
+    if: >-
+      github.event.deployment.creator.login == 'railway-app[bot]' &&
+      github.event.deployment.environment == 'whisperdrop-web / production' &&
+      github.event.deployment_status.state == 'success' &&
+      github.event.deployment_status.environment_url != 'https://whisperdrop-web-production.up.railway.app/'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Link the public site from GitHub Deployments
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DEPLOYMENT_ID: ${{ github.event.deployment.id }}
+          RAILWAY_LOG_URL: ${{ github.event.deployment_status.log_url }}
+        run: |
+          gh api --method POST "repos/$GH_REPO/deployments/$DEPLOYMENT_ID/statuses" \
+            -f state=success \
+            -f environment_url=https://whisperdrop-web-production.up.railway.app/ \
+            -f log_url="$RAILWAY_LOG_URL" \
+            -f description='WhisperDrop Web is available.' \
+            -F auto_inactive=true
