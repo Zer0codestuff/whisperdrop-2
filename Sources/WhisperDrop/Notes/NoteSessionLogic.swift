@@ -114,7 +114,7 @@ enum NotePrompt {
     }
 }
 
-/// Unconfirmed words heard since a stream's last confirmed chunk, shown after the transcript while recording.
+/// Words heard after a stream's last settled word, shown after the transcript while recording.
 struct NoteLivePreview: Equatable, Identifiable {
     var speaker: Speaker?
     var text: String
@@ -298,6 +298,7 @@ enum NoteJobs {
         keepAudio: Bool,
         detectedSpeech: Bool,
         transcriptionWarning: String?,
+        sentenceParagraphs: Bool = false,
         timeZone: TimeZone = .current
     ) -> TranscriptionJob {
         var job = TranscriptionJob(source: transcriptFolder ?? folder, title: resolvedTitle(customTitle, at: recordedAt, timeZone: timeZone))
@@ -305,7 +306,8 @@ enum NoteJobs {
         job.status = .completed
         job.created = recordedAt
         job.segments = segments
-        job.transcript = TranscriptOutput.labeledText(segments)
+        job.sentenceParagraphs = sentenceParagraphs ? true : nil
+        job.transcript = TranscriptOutput.labeledText(segments, eachSentence: sentenceParagraphs)
         job.modelName = modelName
         job.duration = duration
         job.audioFile = keepAudio ? folder : nil

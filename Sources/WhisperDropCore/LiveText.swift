@@ -19,6 +19,8 @@ public struct LiveText: Sendable {
     public private(set) var pending: [TranscriptWord] = []
     /// Audio before this time is represented by `settled`.
     public private(set) var settledUntil: Double
+    /// Settled words already handed out by `takeSettled`.
+    private var taken = 0
 
     public init(start: Double = 0) {
         settledUntil = start
@@ -84,9 +86,20 @@ public struct LiveText: Sendable {
         String(text.lowercased().unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) })
     }
 
-    /// Drops words centered before `time`. Notes call it once a chunk covering them is committed.
+    /// Settled words not handed out yet. Streaming notes commit them as they settle. Only the last three stay,
+    /// which is all the next request needs to find the boundary again, so a long note does not keep every word twice.
+    public mutating func takeSettled() -> [TranscriptWord] {
+        let fresh = Array(settled[taken...])
+        if settled.count > 3 { settled.removeFirst(settled.count - 3) }
+        taken = settled.count
+        return fresh
+    }
+
+    /// Drops words centered before `time`.
     public mutating func discard(through time: Double) {
+        let before = settled.count
         settled.removeAll { ($0.start + $0.end) / 2 < time }
+        taken = max(0, taken - (before - settled.count))
         pending.removeAll { ($0.start + $0.end) / 2 < time }
         settledUntil = max(settledUntil, time)
     }

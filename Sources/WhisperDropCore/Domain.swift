@@ -55,20 +55,21 @@ public struct TranscriptionModel: Identifiable, Sendable, Equatable {
     /// mlx-community/parakeet-tdt-0.6b-v3 bit for bit (checked 2026-10-01). The revision is pinned.
     private static let parakeetRepository = "https://huggingface.co/sonic-speech/parakeet-tdt-0.6b-v3-int4/resolve/aa25511e86a4a83285774ba03df07ca62069de2f/"
 
+    /// Parakeet v3 first: it is the default. Whisper models follow as legacy models.
     public static let catalog: [Self] = [
-        .init(id: "tiny", name: "Tiny", detail: "Smallest download. For clear, simple speech.", filename: "ggml-tiny-q5_1.bin", bytes: 32152673, sha256: "818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7"),
-        .init(id: "base", name: "Base", detail: "Lightweight for everyday recordings.", filename: "ggml-base-q5_1.bin", bytes: 59707625, sha256: "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898"),
-        .init(id: "small", name: "Small", detail: "More detail, with a modest memory footprint.", filename: "ggml-small-q5_1.bin", bytes: 190085487, sha256: "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb"),
-        .init(id: "medium", name: "Medium", detail: "For difficult recordings. Slower than Turbo.", filename: "ggml-medium-q5_0.bin", bytes: 539212467, sha256: "19fea4b380c3a618ec4723c3eef2eb785ffba0d0538cf43f8f235e7b3b34220f"),
-        .init(id: "turbo", name: "Turbo", detail: "Recommended balance of speed and accuracy.", filename: "ggml-large-v3-turbo-q5_0.bin", bytes: 574041195, sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2"),
-        .init(id: "turbo-q8", name: "Turbo Q8", detail: "Higher precision, with a larger download.", filename: "ggml-large-v3-turbo-q8_0.bin", bytes: 874188075, sha256: "317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1"),
-        .init(id: "parakeet-v3", name: "Parakeet v3", detail: "Experimental. Several times faster. 25 European languages, detected automatically. Ignores vocabulary.",
+        .init(id: "parakeet-v3", name: "Parakeet v3", detail: "Default. Fast enough to write while you speak. 25 European languages, detected automatically. Ignores vocabulary.",
               engine: .parakeet, files: [
                 ModelFile(name: "config.json", url: URL(string: parakeetRepository + "config.json")!, bytes: 318613,
                           sha256: "a9a4fff4f7c5c2a4c8d75fdf1e73989dfd5082ef777c022f7cf1a01263a98439"),
                 ModelFile(name: "model.safetensors", url: URL(string: parakeetRepository + "model.safetensors")!, bytes: 488512506,
                           sha256: "327a675ec91846870b6f7792bf080a87c0830731b73739edc2745cff8567e714")
-              ], languages: parakeetLanguages, experimental: true)
+              ], languages: parakeetLanguages, experimental: false),
+        .init(id: "tiny", name: "Tiny", detail: "Smallest download. For clear, simple speech.", filename: "ggml-tiny-q5_1.bin", bytes: 32152673, sha256: "818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7"),
+        .init(id: "base", name: "Base", detail: "Lightweight for everyday recordings.", filename: "ggml-base-q5_1.bin", bytes: 59707625, sha256: "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898"),
+        .init(id: "small", name: "Small", detail: "More detail, with a modest memory footprint.", filename: "ggml-small-q5_1.bin", bytes: 190085487, sha256: "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb"),
+        .init(id: "medium", name: "Medium", detail: "For difficult recordings. Slower than Turbo.", filename: "ggml-medium-q5_0.bin", bytes: 539212467, sha256: "19fea4b380c3a618ec4723c3eef2eb785ffba0d0538cf43f8f235e7b3b34220f"),
+        .init(id: "turbo", name: "Turbo", detail: "Best legacy balance of speed and accuracy. Covers every language.", filename: "ggml-large-v3-turbo-q5_0.bin", bytes: 574041195, sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2"),
+        .init(id: "turbo-q8", name: "Turbo Q8", detail: "Higher precision, with a larger download.", filename: "ggml-large-v3-turbo-q8_0.bin", bytes: 874188075, sha256: "317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1")
     ]
 }
 
@@ -157,6 +158,8 @@ public struct TranscriptionJob: Identifiable, Codable, Sendable {
     public var audioFile: URL?
     /// Writing results stay separate from the timed original transcript.
     public var textRevisions: [TextRevision]?
+    /// Each segment is one sentence and one reading paragraph. Set for notes decoded while recording.
+    public var sentenceParagraphs: Bool?
     public var resolvedKind: JobKind { kind ?? (isRemote ? .youtube : .file) }
     public init(source: URL, title: String? = nil, isRemote: Bool = false) {
         id = UUID(); self.source = source

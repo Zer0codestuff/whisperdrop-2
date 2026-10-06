@@ -14,15 +14,14 @@ Turn recordings, videos and meetings into text, right on your Mac. Record a lect
 
 - Transcribe audio and video files. Drag them into the app or choose them with the file picker.
 - Import YouTube videos and entire playlists by pasting a link.
-- Record lectures, calls and meetings using your microphone, system audio, or both. The transcript appears as you record.
-- Save notes in your library, rename them, and optionally keep the original audio. When recording both sources, the transcript labels them as You and Others.
+- Record lectures, calls and meetings using your microphone, system audio, or both. With Parakeet v3 the text appears a few seconds after it is spoken, one sentence per paragraph. Pause a note and resume it when you are ready.
+- Save notes in your library, rename them by clicking the title, even while recording, and optionally keep the original audio. When recording both sources, the transcript labels them as You and Others.
 - Dictate into other apps by holding a shortcut key. The words appear where your cursor is.
 - Revise selected text with a shortcut using Draft's local writing tools. Review grammar, tone and wording suggestions, or summarize and organize transcripts as separate saved versions.
 - Choose the spoken language once for files, dictation and notes, or let the app detect it. Add subject terms and names in Settings to help recognition.
 - Read transcripts with timestamps, copy the text, or export plain text and SRT or VTT subtitles.
 - Queue several recordings, cancel processing, retry failures, and return to saved transcripts later.
-- Choose one model for everything in **Settings > Models**. Turbo is the default; smaller Whisper models use less memory. Advanced settings can give dictation, notes or files their own model.
-- Try Parakeet v3, an experimental engine that transcribes several times faster in 25 European languages. With it, dictation can write words into the text field while you speak, and notes show everything heard since the last confirmed paragraph.
+- Choose one model for everything in **Settings > Models**. Parakeet v3 is the default: it covers 25 European languages and is fast enough for dictation to write words into the text field while you speak. Whisper models remain available as legacy models for other languages and vocabulary hints; when your language needs one, an installed Whisper model is used automatically. Advanced settings can give dictation, notes or files their own model.
 - Process speech locally. After downloading a model, you can transcribe local files, record notes and dictate offline.
 
 ## Use it in your browser
@@ -37,7 +36,7 @@ The web version is experimental. It does not include the Mac app's global dictat
 
 1. Download the `.dmg` from the [latest release](https://github.com/Zer0codestuff/whisperdrop-2/releases/latest).
 2. Drag **WhisperDrop 2.app** into Applications. If you are updating, quit the old version first and replace it.
-3. Open the app and download a model in **Settings > Models** (also reachable from **Models** in the sidebar). Start with Turbo.
+3. Open the app and download a model in **Settings > Models** (also reachable from **Models** in the sidebar). Start with Parakeet v3. For a language it does not cover, download the legacy Turbo model.
 4. Add a recording, paste a YouTube link, or choose **New note**.
 
 Your Mac needs Apple Silicon and macOS 14 or later. Internet access is needed for model downloads and YouTube imports.
@@ -46,13 +45,15 @@ The current release is not notarized by Apple, so macOS may block the first laun
 
 ## App updates
 
-Starting with 2.6.0, use **WhisperDrop 2 > Check for Updates…** or **Settings > General > App updates**. Daily checks are optional; installation asks for confirmation. Updating preserves downloaded models, saved files and the main writing draft. The public update feed becomes available with the first signed release. Versions without an updater need one manual replacement first. See [in-app updates](docs/updates.md) for release setup and verified limits.
+Starting with 2.6.0, use **WhisperDrop 2 > Check for Updates…** or **Settings > General > App updates**. Daily checks are optional; installation asks for confirmation. Updating preserves downloaded models, saved files and the main writing draft. Versions before 2.6.0 have no updater and need one manual replacement first. See [in-app updates](docs/updates.md) for release setup and verified limits.
 
 ## Notes and dictation
 
 Notes use the app language. To record one note in another language, choose it in **Note language** beside **New note**; the next note uses it once. Use **Keep audio** if you also want to save the recording. You can find kept audio later using the note's audio button.
 
-To rename a saved note, select it and click **Rename…** beside its title, or right-click the note in the library and choose **Rename…**. The new name is saved with the note.
+To rename a note, click its title, type the new name and press Return. This works while the note is recording and after it is saved. You can also right-click a saved note in the library and choose **Rename…**.
+
+**Pause** stops recording without closing the note. Nothing is recorded while paused, the timer stops, and **Resume** continues in the same note and audio files. While paused, the model can unload according to **Unload model**. **Stop and save** works from either state.
 
 For dictation, hold **fn** while speaking and release it to insert the text. With Parakeet v3 and **Live text** set to **In the text field**, words appear in the field while you speak: native apps show every word and correct it in place, while browsers and other apps receive words once they settle, a few seconds behind. Press Escape to discard the dictation, including the words already written. Set **System Settings > Keyboard > Press 🌐 key to > Do Nothing** so macOS does not open its emoji picker or Dictation at the same time. You can choose a different shortcut in the app's Settings.
 
@@ -108,13 +109,13 @@ Whisper models use GGML files, not GGUF. Downloads are checked against their SHA
 | Base | Q5_1 | 60 MB |
 | Small | Q5_1 | 190 MB |
 | Medium | Q5_0 | 539 MB |
-| Turbo, default | Q5_0 | 574 MB |
+| Turbo, legacy | Q5_0 | 574 MB |
 | Turbo Q8 | Q8_0 | 874 MB |
-| Parakeet v3, experimental | 4-bit encoder | 489 MB |
+| Parakeet v3, default | 4-bit encoder | 489 MB |
 
 Sizes are decimal and rounded. Whisper models come from [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp); Parakeet uses NVIDIA weights converted and quantized by mlx-community and sonic-speech. Larger models are not always more accurate for a particular recording. [Model research](docs/models.md) covers the experiments.
 
-Parakeet v3 is NVIDIA's Parakeet TDT 0.6B v3, run by the bundled `parakeet-server` on MLX. It covers 25 European languages, including Italian, English, French, German and Spanish, and detects the language by itself. It does not use the vocabulary lists. Files are sent in windows of up to 35 seconds cut at pauses. With Parakeet, **Live text** decodes the newest audio about every second. Words settle once about six seconds of audio follow them; later requests start ten seconds before the settled words and cover at most 30 seconds, so requests stay short however long you speak. See [the Parakeet evaluation](docs/parakeet-evaluation.md) for accuracy, speed and known limits.
+Parakeet v3 is NVIDIA's Parakeet TDT 0.6B v3, run by the bundled `parakeet-server` on MLX. It covers 25 European languages, including Italian, English, French, German and Spanish, and detects the language by itself. It does not use the vocabulary lists. Files are sent in windows of up to 35 seconds cut at pauses. Parakeet v3 is an offline model, so text while you speak comes from decoding short, overlapping windows of the newest audio about every 1.5 seconds. A word settles once about six seconds of audio follow it; each request starts ten seconds before the settled words and covers at most 30 seconds, so requests stay short however long you speak. Notes are not cut into chunks: each word joins the transcript once it settles, and a new paragraph starts whenever a sentence ends, with no time limit. With legacy Whisper models, notes still wait for a pause or about a minute of speech. See [the Parakeet evaluation](docs/parakeet-evaluation.md) for accuracy, speed and known limits.
 
 Dictation and notes share a resident model process. It unloads after 10 minutes idle by default. **Settings > Models > Unload model** offers other intervals; **Keep model ready** in the menu bar is the same setting as its **Keep model ready** choice. When dictation and notes use different models, switching between them reloads the process.
 

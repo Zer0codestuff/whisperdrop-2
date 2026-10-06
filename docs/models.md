@@ -1,10 +1,10 @@
 # Speech model candidates
 
-Research checked on 2026-09-29, with local experiments on 2026-10-01. Parakeet v3 is now available as an experimental MLX engine in the working build. Whisper Turbo Q5 remains the default. Compare accuracy, latency and memory on the same recordings before changing it.
+Research checked on 2026-09-29, with local experiments on 2026-10-01. On 2026-10-06 the user made Parakeet v3 (native MLX) the default. Whisper models stay as legacy models: an installed one is used automatically for languages Parakeet does not cover. Compare accuracy, latency and memory on the same recordings before changing defaults again.
 
-## Current engine
+## Legacy engine
 
-[whisper.cpp](https://github.com/ggml-org/whisper.cpp) supports quantized Whisper GGML weights and Metal on Apple Silicon. Tiny and Base remain the smallest options in this app. Turbo Q5 is the default for a wider accuracy/speed balance. The GGML file format used here is not interchangeable with arbitrary GGUF files.
+[whisper.cpp](https://github.com/ggml-org/whisper.cpp) supports quantized Whisper GGML weights and Metal on Apple Silicon. Tiny and Base remain the smallest options in this app. Turbo Q5 is the recommended legacy model and the first legacy fallback. The GGML file format used here is not interchangeable with arbitrary GGUF files.
 
 ## Parakeet TDT 0.6B v3
 
@@ -48,4 +48,4 @@ It is worth evaluating for recognition quality. An efficient native macOS runtim
 
 ## Recommendation
 
-Keep Whisper as the working baseline. Parakeet v3 through native MLX is now measured on public sets; test it next on real lecture recordings with accents, background noise and long pauses. Record word error rate, peak memory, elapsed time and cold-start cost on Apple Silicon. Consider Qwen only after verifying a suitable local runtime. Avoid claiming either model is universally better based on vendor benchmarks.
+Parakeet v3 through native MLX is the default; Whisper is the legacy baseline for other languages. Test Parakeet next on more real lecture recordings with accents, background noise and long pauses. Record word error rate, peak memory, elapsed time and cold-start cost on Apple Silicon. Consider Qwen only after verifying a suitable local runtime. Avoid claiming either model is universally better based on vendor benchmarks.

@@ -4,9 +4,9 @@ import WhisperDropCore
 
 @MainActor
 final class AppSettingsTests: XCTestCase {
-    func testDefaultsPreferTurboAndTenMinuteResidency() {
+    func testDefaultsPreferParakeetAndTenMinuteResidency() {
         let settings = AppSettings(defaults: UserDefaults(suiteName: "WhisperDropAppTests.\(UUID().uuidString)")!)
-        XCTAssertEqual(settings.model.id, "turbo")
+        XCTAssertEqual(settings.model.id, "parakeet-v3")
         XCTAssertEqual(settings.residency, .tenMinutes)
         XCTAssertEqual(settings.hotkey, .fn)
     }
@@ -84,7 +84,7 @@ final class AppSettingsTests: XCTestCase {
                                     captures: factory, defaults: defaults)
         recorder.requestStart(.microphone)
         await Task.yield()
-        XCTAssertEqual(recorder.state, .failed("Parakeet v3 does not transcribe Japanese. Choose a Whisper model in Settings, Models."))
+        XCTAssertEqual(recorder.state, .failed("Parakeet v3 does not transcribe Japanese. Download a legacy Whisper model in Settings, Models."))
         XCTAssertFalse(requestedAccess)
         XCTAssertFalse(requestedModel)
         XCTAssertEqual(host.state, .unloaded)
@@ -129,6 +129,44 @@ final class AppSettingsTests: XCTestCase {
         reloaded.setOwnModel("turbo", for: .files)
         reloaded.setOwnModel(nil, for: .files)
         XCTAssertNil(AppSettings(defaults: defaults).ownModel(for: .files))
+    }
+
+    func testTurboMovesToParakeetOnceWhenInstalled() {
+        let defaults = UserDefaults(suiteName: "WhisperDropAppTests.\(UUID().uuidString)")!
+        defaults.set("turbo", forKey: "mainModel")
+        AppSettings(defaults: defaults).adoptParakeetDefault(installed: ["turbo"])
+        XCTAssertEqual(AppSettings(defaults: defaults).mainModel, "turbo", "Parakeet is not installed")
+        AppSettings(defaults: defaults).adoptParakeetDefault(installed: ["turbo", "parakeet-v3"])
+        XCTAssertEqual(AppSettings(defaults: defaults).mainModel, "turbo", "The move is offered once")
+
+        let migrating = UserDefaults(suiteName: "WhisperDropAppTests.\(UUID().uuidString)")!
+        migrating.set("turbo", forKey: "mainModel")
+        AppSettings(defaults: migrating).adoptParakeetDefault(installed: ["turbo", "parakeet-v3"])
+        let moved = AppSettings(defaults: migrating)
+        XCTAssertEqual(moved.mainModel, "parakeet-v3")
+        moved.mainModel = "turbo"
+        moved.adoptParakeetDefault(installed: ["turbo", "parakeet-v3"])
+        XCTAssertEqual(AppSettings(defaults: migrating).mainModel, "turbo", "A later choice of Turbo stays")
+
+        let chosen = UserDefaults(suiteName: "WhisperDropAppTests.\(UUID().uuidString)")!
+        chosen.set("small", forKey: "mainModel")
+        AppSettings(defaults: chosen).adoptParakeetDefault(installed: ["small", "parakeet-v3"])
+        XCTAssertEqual(AppSettings(defaults: chosen).mainModel, "small")
+    }
+
+    func testUnsupportedLanguageFallsBackToAnInstalledWhisperModel() {
+        let settings = AppSettings(defaults: UserDefaults(suiteName: "WhisperDropAppTests.\(UUID().uuidString)")!)
+        settings.mainModel = "parakeet-v3"
+        settings.spokenLanguage = "ja"
+        XCTAssertEqual(settings.model(for: .dictation).id, "parakeet-v3", "Nothing to fall back to")
+        settings.installedModels = { ["parakeet-v3", "small", "turbo-q8"] }
+        XCTAssertEqual(settings.model(for: .dictation).id, "turbo-q8")
+        XCTAssertEqual(settings.chosenModel(for: .dictation).id, "parakeet-v3")
+        settings.spokenLanguage = "it"
+        XCTAssertEqual(settings.model(for: .files).id, "parakeet-v3")
+        settings.nextNoteLanguage = "ja"
+        XCTAssertEqual(settings.model(for: .notes).id, "turbo-q8", "Notes use the next note's language")
+        XCTAssertEqual(settings.model(for: .dictation).id, "parakeet-v3")
     }
 
     func testKeepModelReadyIsTheKeepLoadedResidency() {

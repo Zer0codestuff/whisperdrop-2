@@ -303,9 +303,15 @@ private struct ModelsPane: View {
         PaneHeader(title: "Models", subtitle: "Choose local models for transcription and text editing.")
         Text("Transcription").font(.system(size: 17, weight: .medium)).padding(.bottom, 12)
         statusCard.padding(.bottom, 14)
-        ForEach(Array(TranscriptionModel.catalog.enumerated()), id: \.element.id) { index, model in
-            ModelRow(model: model, divider: index > 0)
+        ForEach(TranscriptionModel.catalog.filter { !$0.isLegacy }) { model in
+            ModelRow(model: model, divider: false)
         }
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Legacy: Whisper").font(.system(size: 13, weight: .medium))
+            Text("Slower, and notes appear in chunks. Use one for languages Parakeet does not cover, or for vocabulary hints.")
+                .font(.system(size: 11)).foregroundStyle(LivePalette.secondary).fixedSize(horizontal: false, vertical: true)
+        }.padding(.top, 22).padding(.bottom, 8)
+        ForEach(TranscriptionModel.catalog.filter(\.isLegacy)) { ModelRow(model: $0) }
         Rectangle().fill(LivePalette.line).frame(height: 1)
         if let warning = languageWarning {
             HStack(alignment: .top, spacing: 8) {
@@ -320,7 +326,7 @@ private struct ModelsPane: View {
             }.pickerStyle(.menu).labelsHidden().frame(width: 230)
         }
         Rectangle().fill(LivePalette.line).frame(height: 1)
-        Text("Whisper GGML, Q5 quantization except Turbo Q8. Parakeet v3, NVIDIA weights with a 4-bit encoder on MLX. Downloads are verified before installation.")
+        Text("Parakeet v3, NVIDIA weights with a 4-bit encoder on MLX. Whisper GGML, Q5 quantization except Turbo Q8. Downloads are verified before installation.")
             .font(.system(size: 11)).foregroundStyle(LivePalette.secondary).fixedSize(horizontal: false, vertical: true).padding(.top, 14)
             .onAppear { showTasks = ModelTask.allCases.contains { settings.ownModel(for: $0) != nil } }
             .onChange(of: settings.residency) { _, value in
@@ -361,7 +367,7 @@ private struct ModelsPane: View {
             }.contentShape(Rectangle())
         }.buttonStyle(.plain).padding(.bottom, 4)
         if showTasks {
-            Text("For example, Parakeet v3 for dictation and Whisper for lectures. Switching between two models reloads the speech model, which takes a few seconds.")
+            Text("For example, a legacy Whisper model for files in a language Parakeet does not cover. Switching between two models reloads the speech model, which takes a few seconds.")
                 .font(.system(size: 11)).foregroundStyle(LivePalette.secondary).fixedSize(horizontal: false, vertical: true).padding(.bottom, 4)
             ForEach(ModelTask.allCases) { task in
                 SettingRow(title: task.label, divider: task != .dictation) {
@@ -382,10 +388,15 @@ private struct ModelsPane: View {
     }
 
     private var languageWarning: String? {
-        let unsupported = ModelTask.allCases.filter { !settings.model(for: $0).supports(language: settings.spokenLanguage) }
+        let language = LiveFormat.language(settings.spokenLanguage)
+        let unsupported = ModelTask.allCases.filter { !settings.chosenModel(for: $0).supports(language: settings.spokenLanguage) }
         guard !unsupported.isEmpty else { return nil }
-        let names = Set(unsupported.map { settings.model(for: $0).name }).sorted().joined(separator: " and ")
-        return "\(names) does not transcribe \(LiveFormat.language(settings.spokenLanguage)), your spoken language. Choose a Whisper model, or change the language in General."
+        let names = Set(unsupported.map { settings.chosenModel(for: $0).name }).sorted().joined(separator: " and ")
+        let fallback = ModelTask.allCases.map { settings.model(for: $0) }.first { $0.isLegacy && $0.supports(language: settings.spokenLanguage) }
+        if let fallback {
+            return "\(names) does not transcribe \(language), your spoken language. \(fallback.name) is used instead."
+        }
+        return "\(names) does not transcribe \(language), your spoken language. Download a legacy Whisper model, or change the language in General."
     }
     private var isFailed: Bool { if case .failed = host.state { true } else { false } }
     private var stateColor: Color {
@@ -504,7 +515,7 @@ private struct NotesPane: View {
             OpenModelsButton { Text("Models…") }.buttonStyle(.plain).font(.system(size: 12, weight: .medium)).foregroundStyle(LivePalette.green)
         }
         SettingRow(title: "Live text", detail: model.engine == .parakeet
-                   ? "Shows the words heard since the last confirmed paragraph, in grey, while you record."
+                   ? "Text settles a few seconds after it is spoken. This also shows the newest words, in grey, before they settle."
                    : "Available with Parakeet v3. With Whisper, text appears after a pause or about a minute of speech.") {
             Switch(isOn: $settings.noteLiveText)
         }.disabled(model.engine != .parakeet)

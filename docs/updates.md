@@ -1,6 +1,6 @@
 # In-app updates
 
-WhisperDrop 2.6.0 build 10 includes Sparkle 2.10.0. Use **WhisperDrop 2 > Check for Updates…**, or the same button in **Settings > General > App updates**. Automatic daily checks are optional and off by default. Updates are installed only after confirmation. System profiling and automatic installation are disabled.
+WhisperDrop 2.6.0 includes Sparkle 2.10.0; the published release is build 11. Use **WhisperDrop 2 > Check for Updates…**, or the same button in **Settings > General > App updates**. Automatic daily checks are optional and off by default. Updates are installed only after confirmation. System profiling and automatic installation are disabled.
 
 The updater replaces the app bundle. Models, library files, preferences and saved text versions remain outside it. It waits for recording, dictation, transcription, imports, file moves, model downloads, writing actions and queued note summaries to finish. Close a transient writing review panel before updating. The main writing draft and suggestion are saved atomically before restart, restored on launch, and never restore a cross-app replacement target. If saving fails, the restart waits and Settings offers **Retry update**.
 
@@ -12,7 +12,7 @@ The updater replaces the app bundle. Models, library files, preferences and save
 
 The private key was generated with Sparkle's official tool and is stored in the login Keychain under account `io.github.zer0codestuff.whisperdrop2.sparkle`. It is not in the repository or app bundle. Both the update archive and feed must be signed with this key. The client verifies the archive before extraction and rejects unsigned or changed feeds without a timed fallback. Production feeds require HTTPS. Loopback HTTP is accepted only by the separate verification bundle identifier.
 
-This candidate has not been published. The production feed will become available only after a GitHub release includes the signed `appcast.xml` and its ZIP asset. A check against the current public release cannot provide an update until then. Existing versions without Sparkle need one manual replacement with this bootstrap version. Later versions can update from the app.
+The production feed is published with the 2.6.0 GitHub release (October 6, 2026), which carries the signed `appcast.xml` and its ZIP. Versions before 2.6.0 have no updater and need one manual replacement with the DMG. Later versions update from the app.
 
 ## Prepare a release
 
@@ -45,8 +45,8 @@ The final full release suite discovered 145 tests: 135 passed, ten optional fixt
 
 The build 10 DMG was mounted read-only: 120 regular files and nine framework links matched the candidate, and all 14 Mach-O executables passed strict signature checks. Both Turbo and the rebuilt Parakeet runtime silently transcribed the same 12-second Italian fixture successfully. Packaging now checks the DMG checksum before reporting success; a partial image created during low disk space was rejected and rebuilt. The ZIP also passed its compressed-data integrity check.
 
-On October 3, the production build 10 replaced build 9 in `/Applications/WhisperDrop 2.app`. The signed production feed and ZIP passed independent signature and SHA-256 checks. The installed bundle matched the candidate, launched successfully, and exposed Check for Updates in Settings, General. Every retained data file was checked before and after launch; canonical history, saved-file references and model hashes/inodes were unchanged. The previous app bundle was removed. The production feed remains unpublished.
+On October 3, the production build 10 replaced build 9 in `/Applications/WhisperDrop 2.app`. The signed production feed and ZIP passed independent signature and SHA-256 checks. The installed bundle matched the candidate, launched successfully, and exposed Check for Updates in Settings, General. Every retained data file was checked before and after launch; canonical history, saved-file references and model hashes/inodes were unchanged. The previous app bundle was removed. The feed was not public yet at that point.
 
-The end-to-end update used an isolated writable installation and local HTTP transport, with the same Ed25519 validation required in production. It does not establish behaviour for a quarantined first download, a root-owned installation needing authorization, macOS 14 hardware, or a public GitHub feed that has not been published. No active microphone session was used; restart deferral was exercised through the controller tests. Reports and synthetic fixtures are in ignored `.experiments/updater/`.
+The end-to-end update used an isolated writable installation and local HTTP transport, with the same Ed25519 validation required in production. It does not establish behaviour for a quarantined first download, a root-owned installation needing authorization, macOS 14 hardware, or the public GitHub feed, which was published later. No active microphone session was used; restart deferral was exercised through the controller tests. Reports and synthetic fixtures are in ignored `.experiments/updater/`.
 
 Reference: [Sparkle setup](https://sparkle-project.org/documentation/), [publishing](https://sparkle-project.org/documentation/publishing/) and [security settings](https://sparkle-project.org/documentation/customization/).

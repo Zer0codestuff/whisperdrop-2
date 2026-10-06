@@ -31,6 +31,8 @@ struct WhisperDropApp: App {
         appDefaults = defaults
         let store = AppStore(root: root)
         let settings = AppSettings(defaults: defaults)
+        settings.installedModels = { [weak store] in store?.downloaded ?? [] }
+        settings.adoptParakeetDefault(installed: store.downloaded)
         let writingSettings = WritingSettings(defaults: defaults)
         let textModels = TextModelStore(folder: store.root.appendingPathComponent("TextModels"))
         let textEngine = TextGenerationEngine(runtime: { try store.tool("llama-server") }, processFile: store.root.appendingPathComponent("text-engine.pid"))
@@ -56,7 +58,7 @@ struct WhisperDropApp: App {
         store.canMoveSavedFiles = { [weak recorder] in recorder.map { !LiveNote.isActive($0.state) } ?? true }
         store.audioBoostEnabled = { [weak settings] in settings?.automaticAudioBoost ?? true }
         store.spokenLanguage = { [weak settings] in settings?.spokenLanguage ?? "auto" }
-        store.fileModel = { [weak settings] in settings?.model(for: .files) ?? TranscriptionModel.catalog.first { $0.id == "turbo" }! }
+        store.fileModel = { [weak settings] in settings?.model(for: .files) ?? TranscriptionModel.catalog[0] }
         recorder.canStartRecording = { [weak store] in store?.canRecordNotes ?? false }
         recorder.modelInstalled = { [weak store] model in store?.downloaded.contains(model.id) ?? false }
         dictation.modelInstalled = { [weak store] model in store?.downloaded.contains(model.id) ?? false }

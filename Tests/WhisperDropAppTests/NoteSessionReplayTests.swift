@@ -12,6 +12,9 @@ final class NoteSessionReplayTests: XCTestCase {
             throw XCTSkip("Set WHISPERDROP_SESSION_AUDIO and WHISPERDROP_SESSION_REPORT for a silent session replay")
         }
         let pace = Double(env["WHISPERDROP_SESSION_SPEED"] ?? "1") ?? 1
+        // Optional pause: at this many recorded seconds, for this many wall seconds.
+        let pauseAt = env["WHISPERDROP_SESSION_PAUSE_AT"].flatMap(Double.init)
+        let pauseFor = Double(env["WHISPERDROP_SESSION_PAUSE_FOR"] ?? "5") ?? 5
         let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let folder = URL(fileURLWithPath: report + ".recordings", isDirectory: true)
         let models = env["WHISPERDROP_SESSION_MODELS"].map { URL(fileURLWithPath: $0) }
@@ -24,7 +27,7 @@ final class NoteSessionReplayTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let settings = AppSettings(defaults: defaults)
         settings.spokenLanguage = env["WHISPERDROP_SESSION_LANGUAGE"] ?? "it"
-        settings.mainModel = env["WHISPERDROP_SESSION_MODEL"] ?? "turbo"
+        settings.mainModel = env["WHISPERDROP_SESSION_MODEL"] ?? "parakeet-v3"
         settings.noteVocabulary = env["WHISPERDROP_SESSION_VOCABULARY"] ?? ""
         settings.keepNoteAudio = env["WHISPERDROP_SESSION_KEEP_AUDIO"] != "0"
         settings.automaticAudioBoost = env["WHISPERDROP_SESSION_AUDIO_BOOST"] != "0"
@@ -36,10 +39,15 @@ final class NoteSessionReplayTests: XCTestCase {
         let recorder = NoteRecorder(settings: settings, host: host, folder: folder, onFinish: { saved = $0 }, captures: factory, defaults: defaults,
             folderProvider: { (audio: folder.appendingPathComponent("Audio"), transcripts: folder.appendingPathComponent("Transcripts")) })
         defer { if recorder.state != .idle { recorder.finishForTermination() } }
-        source.onEnd = { [weak recorder] in Task { @MainActor in recorder?.stop() } }
+        var sourceEndedAt: Date?
+        source.onEnd = { [weak recorder] in Task { @MainActor in sourceEndedAt = Date(); recorder?.stop() } }
         let started = Date()
         recorder.start(.microphone)
-        let deadline = Date().addingTimeInterval(source.duration / max(0.01, pace) + source.duration + 120)
+        let deadline = Date().addingTimeInterval(source.duration / max(0.01, pace) + source.duration + 120 + pauseFor)
+        var pausedAt: Date?
+        var boostedSeen = false
+        var maxPreprocessing = 0.0
+        var pauseEvents: [[String: Any]] = []
         var previews: [[String: Any]] = []
         var lastPreview: [NoteLivePreview] = []
         var lastSegmentCount = 0
@@ -47,13 +55,29 @@ final class NoteSessionReplayTests: XCTestCase {
         while saved == nil && Date() < deadline {
             if case .failed(let error) = recorder.state { XCTFail(error); break }
             let wall = Date().timeIntervalSince(started)
+            boostedSeen = boostedSeen || host.lastAudioGain > 1
+            maxPreprocessing = max(maxPreprocessing, host.lastPreprocessingSeconds)
+            if let pauseAt, pausedAt == nil, pauseEvents.isEmpty, recorder.state == .recording, recorder.elapsed >= pauseAt {
+                recorder.pause()
+                pausedAt = Date()
+                pauseEvents.append(["wall": wall, "event": "pause", "recording_seconds": recorder.elapsed])
+            }
+            if let since = pausedAt, recorder.state == .paused {
+                XCTAssertEqual(source.droppedPacketCount, 0)
+                if Date().timeIntervalSince(since) >= pauseFor {
+                    pauseEvents.append(["wall": wall, "event": "resume", "recording_seconds": recorder.elapsed,
+                                        "segments_while_paused": recorder.segments.count, "preview_while_paused": recorder.livePreview.map(\.text).joined(separator: " ")])
+                    recorder.resume()
+                    pausedAt = nil
+                }
+            }
             if recorder.livePreview != lastPreview {
                 lastPreview = recorder.livePreview
                 previews.append(["wall": wall, "recording_seconds": recorder.elapsed, "text": lastPreview.map(\.text).joined(separator: " ")])
             }
             if recorder.segments.count != lastSegmentCount {
                 lastSegmentCount = recorder.segments.count
-                segmentEvents.append(["wall": wall, "recording_seconds": recorder.elapsed, "segments": lastSegmentCount,
+                segmentEvents.append(["wall": wall, "recording_seconds": recorder.elapsed, "segments": lastSegmentCount, "lag": recorder.lagSeconds,
                                       "last_end": recorder.segments.last?.end ?? 0])
             }
             try await Task.sleep(for: .milliseconds(100))
@@ -91,6 +115,10 @@ final class NoteSessionReplayTests: XCTestCase {
         data["dropped_packets"] = source.droppedPacketCount
         data["live_previews"] = previews
         data["segment_events"] = segmentEvents
+        data["pause_events"] = pauseEvents
+        data["boost_seen"] = boostedSeen
+        data["max_preprocessing_seconds"] = maxPreprocessing
+        data["source_end_wall"] = sourceEndedAt.map { $0.timeIntervalSince(started) } as Any
         try JSONSerialization.data(withJSONObject: data, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: report))
     }
 }
@@ -106,7 +134,8 @@ private final class ReplayCapture: NoteCaptureSource, @unchecked Sendable {
     private let file: AVAudioFile
     private let buffer: AVAudioPCMBuffer
     private let speed: Double
-    private let queue = DispatchQueue(label: "whisperdrop.test-replay")
+    /// Stands in for the audio hardware clock, so it must not slow down under inference load.
+    private let queue = DispatchQueue(label: "whisperdrop.test-replay", qos: .userInteractive)
     private var timer: DispatchSourceTimer?
     private var handoff: PCMSlotQueue?
     private let resampler = Mono16kResampler()
@@ -131,19 +160,18 @@ private final class ReplayCapture: NoteCaptureSource, @unchecked Sendable {
         }
         handoff?.start()
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + .milliseconds(100), repeating: max(0.0001, 0.02 / max(0.01, speed)))
-        timer.setEventHandler { [weak self] in
-            guard let self else { return }
-            do {
-                try self.file.read(into: self.buffer, frameCount: 320)
-                if self.buffer.frameLength > 0 { self.handoff?.publish(self.buffer) }
-                else {
-                    self.timer?.cancel()
-                    self.onEnd?()
-                }
-            } catch {
-                self.timer?.cancel()
+        timer.schedule(deadline: .now() + .milliseconds(100), repeating: max(0.0001, 0.02 / max(0.01, speed)), leeway: .milliseconds(1))
+        timer.setEventHandler { [weak self, weak timer] in
+            guard let self, let timer else { return }
+            // A late handler covers every tick it missed, as audio hardware delivers every frame.
+            for _ in 0..<max(1, Int(timer.data)) {
+                do {
+                    try self.file.read(into: self.buffer, frameCount: 320)
+                    if self.buffer.frameLength > 0 { self.handoff?.publish(self.buffer); continue }
+                } catch {}
+                timer.cancel()
                 self.onEnd?()
+                return
             }
         }
         self.timer = timer

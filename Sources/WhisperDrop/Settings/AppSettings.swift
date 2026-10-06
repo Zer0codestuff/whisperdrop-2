@@ -91,7 +91,14 @@ final class AppSettings: ObservableObject {
     /// Language for the next note only. Cleared when that note starts.
     @Published var nextNoteLanguage: String?
     /// Model id from `TranscriptionModel.catalog`. Every task uses it unless it has its own model.
-    @Published var mainModel: String { didSet { defaults.set(mainModel, forKey: "mainModel") } }
+    @Published var mainModel: String {
+        didSet {
+            defaults.set(mainModel, forKey: "mainModel")
+            defaults.set(true, forKey: Self.parakeetDefaultKey)
+        }
+    }
+    /// Installed model ids. A task whose model does not transcribe its language falls back to an installed Whisper model.
+    var installedModels: () -> Set<String> = { [] }
     /// Per-task model ids. A missing entry follows `mainModel`.
     @Published private(set) var taskModels: [ModelTask: String] = [:]
     /// Optional words and names passed to Whisper as a prompt.
@@ -120,7 +127,7 @@ final class AppSettings: ObservableObject {
         // Before 2.5 the main window chose the file model ("model") and Settings chose the dictation and note model
         // ("liveModel"). The Settings choice becomes the one model.
         mainModel = Self.known(defaults.string(forKey: "mainModel")) ?? Self.known(defaults.string(forKey: "liveModel"))
-            ?? Self.known(defaults.string(forKey: "model")) ?? "turbo"
+            ?? Self.known(defaults.string(forKey: "model")) ?? Self.defaultModel
         var own: [ModelTask: String] = [:]
         for task in ModelTask.allCases {
             if let id = Self.known(defaults.string(forKey: task.key)) { own[task] = id }
@@ -148,13 +155,30 @@ final class AppSettings: ObservableObject {
         defaults.removeObject(forKey: "keepReady")
     }
 
+    static let defaultModel = "parakeet-v3"
+    private static let parakeetDefaultKey = "parakeetDefaultAdopted"
+
+    /// Parakeet v3 replaced Turbo as the default in 2.6. Runs once: a Turbo main model moves to Parakeet if it is
+    /// installed. Without Parakeet, or after the user has chosen a model since, the choice stays.
+    func adoptParakeetDefault(installed: Set<String>) {
+        guard !defaults.bool(forKey: Self.parakeetDefaultKey) else { return }
+        if mainModel == "turbo", installed.contains(Self.defaultModel) { mainModel = Self.defaultModel }
+        defaults.set(true, forKey: Self.parakeetDefaultKey)
+    }
+
     private static func known(_ id: String?) -> String? {
         id.flatMap { id in TranscriptionModel.catalog.contains { $0.id == id } ? id : nil }
     }
 
     /// The main model.
     var model: TranscriptionModel { Self.catalogModel(mainModel) }
-    func model(for task: ModelTask) -> TranscriptionModel { Self.catalogModel(taskModels[task] ?? mainModel) }
+    /// The model a task uses now: its chosen model, or an installed Whisper model when that one does not transcribe
+    /// the task's language.
+    func model(for task: ModelTask) -> TranscriptionModel {
+        TranscriptionModel.resolved(chosenModel(for: task), language: task == .notes ? noteLanguage : spokenLanguage, installed: installedModels())
+    }
+    /// The task's own model or the main model, before any language fallback.
+    func chosenModel(for task: ModelTask) -> TranscriptionModel { Self.catalogModel(taskModels[task] ?? mainModel) }
     /// The task's own model id, or nil when it follows the main model.
     func ownModel(for task: ModelTask) -> String? { taskModels[task] }
     func setOwnModel(_ id: String?, for task: ModelTask) {
@@ -163,7 +187,7 @@ final class AppSettings: ObservableObject {
         if let value { defaults.set(value, forKey: task.key) } else { defaults.removeObject(forKey: task.key) }
     }
     private static func catalogModel(_ id: String) -> TranscriptionModel {
-        TranscriptionModel.catalog.first { $0.id == id } ?? TranscriptionModel.catalog.first { $0.id == "turbo" }!
+        TranscriptionModel.catalog.first { $0.id == id } ?? TranscriptionModel.catalog.first { $0.id == defaultModel }!
     }
 
     /// Menu bar shortcut for the Keep model ready residency. Turning it off restores the previous choice.

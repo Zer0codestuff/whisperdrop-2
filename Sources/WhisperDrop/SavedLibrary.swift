@@ -110,7 +110,7 @@ enum SavedLibrary {
 
     static func archive(_ job: TranscriptionJob, in folder: URL, preserveExistingRecovery: Bool = false) throws {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let text = job.resolvedKind == .note ? TranscriptOutput.labeledText(job.segments) : job.transcript
+        let text = job.resolvedKind == .note ? TranscriptOutput.labeledText(job.segments, eachSentence: job.sentenceParagraphs == true) : job.transcript
         try text.write(to: folder.appendingPathComponent("transcript.txt"), atomically: true, encoding: .utf8)
         try TranscriptOutput.subtitles(job.segments, vtt: false).write(to: folder.appendingPathComponent("transcript.srt"), atomically: true, encoding: .utf8)
         try TranscriptOutput.subtitles(job.segments, vtt: true).write(to: folder.appendingPathComponent("transcript.vtt"), atomically: true, encoding: .utf8)

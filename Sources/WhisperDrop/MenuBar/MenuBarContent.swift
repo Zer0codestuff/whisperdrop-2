@@ -83,6 +83,7 @@ struct MenuBarContent: View {
         switch recorder.state {
         case .starting: return ("Starting note", LivePalette.green, nil)
         case .recording: return ("Recording note", LivePalette.green, LiveFormat.clock(recorder.elapsed))
+        case .paused: return ("Note paused", LivePalette.secondary, LiveFormat.clock(recorder.elapsed))
         case .finishing: return ("Saving note", LivePalette.green, LiveFormat.clock(recorder.elapsed))
         case .failed(let message): return (message, .red, nil)
         case .idle: break
@@ -162,7 +163,7 @@ struct MenuBarContent: View {
                 if recorder.sources.usesMicrophone { meter("You", recorder.micLevel) }
                 if recorder.sources.usesSystemAudio { meter("Others", recorder.systemLevel) }
                 Spacer()
-                if recorder.pendingChunks > 1 {
+                if recorder.pendingChunks > 1 || recorder.lagSeconds > 20 {
                     Text("Catching up…").font(.system(size: 11)).foregroundStyle(LivePalette.secondary)
                 }
             }
@@ -178,8 +179,13 @@ struct MenuBarContent: View {
                     }
                     .buttonStyle(LiveQuietButton()).foregroundStyle(confirmDiscard ? Color.red : Color.white)
                     Spacer()
+                    if recorder.state == .paused {
+                        Button("Resume") { recorder.resume() }.buttonStyle(LiveQuietButton())
+                    } else {
+                        Button("Pause") { recorder.pause() }.buttonStyle(LiveQuietButton()).disabled(recorder.state != .recording)
+                    }
                     Button("Stop and save") { confirmDiscard = false; recorder.stop() }.buttonStyle(LiveGreenButton())
-                        .disabled(recorder.state != .recording)
+                        .disabled(recorder.state != .recording && recorder.state != .paused)
                 }
             }
         }

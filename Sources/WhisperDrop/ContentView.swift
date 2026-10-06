@@ -19,6 +19,7 @@ struct ContentView: View {
     @AppStorage("guideDone") private var guideDone = false
     @State private var targeted = false
     @State private var renamingNote: TranscriptionJob?
+    @State private var editingTitle = false
     @State private var displayedRevision: UUID?
     var body: some View {
         HStack(spacing: 0) {
@@ -35,7 +36,7 @@ struct ContentView: View {
         .frame(minWidth: 860, minHeight: 580)
         .background(Color.black)
         .tint(Palette.green)
-        .onChange(of: store.selection) { displayedRevision = nil }
+        .onChange(of: store.selection) { displayedRevision = nil; editingTitle = false }
         .onChange(of: recorder.state) {
             if LiveNote.isActive(recorder.state) { writing.showLibrary() }
             if case .failed(let message) = recorder.state {
@@ -181,16 +182,18 @@ struct ContentView: View {
     private var header: some View {
         HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(store.current?.title ?? "Transcribe").font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                if let job = store.current, job.resolvedKind == .note {
+                    EditableTitle(text: job.title, enabled: store.canRenameNote(job), editing: $editingTitle) { name in
+                        do { try store.renameNote(job.id, to: name) }
+                        catch { store.error = "Could not rename the note: \(error.localizedDescription)" }
+                    }.font(.system(size: 17, weight: .semibold)).id(job.id)
+                } else {
+                    Text(store.current?.title ?? "Transcribe").font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                }
                 Text(store.current.map(sourceLabel) ?? "Audio and video, in your own words.")
                     .font(.system(size: 11)).foregroundStyle(Palette.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
-            if let job = store.current, job.resolvedKind == .note {
-                Button("Rename…") { renamingNote = job }
-                    .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Palette.secondary)
-                    .disabled(!store.canRenameNote(job))
-            }
             if store.current?.status == .completed {
                 if let job = store.current {
                     Menu {
@@ -270,7 +273,7 @@ struct ContentView: View {
                     if let warning = job.error, !job.segments.isEmpty {
                         Text(warning).font(.system(size: 12)).foregroundStyle(.orange)
                     }
-                    ForEach(TranscriptOutput.paragraphs(job.segments)) { segment in
+                    ForEach(TranscriptOutput.paragraphs(job.segments, eachSentence: job.sentenceParagraphs == true)) { segment in
                         HStack(alignment: .firstTextBaseline, spacing: 22) {
                             Text(segment.timeLabel).font(.system(size: 11)).monospacedDigit().foregroundStyle(Palette.secondary).frame(width: 44, alignment: .leading)
                             if let speaker = segment.speaker {

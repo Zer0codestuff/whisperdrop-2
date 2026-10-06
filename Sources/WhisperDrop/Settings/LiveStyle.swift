@@ -110,10 +110,56 @@ enum LiveFormat {
     }
 }
 
+/// A title that becomes a text field when clicked. Return or clicking elsewhere saves; Escape cancels.
+struct EditableTitle: View {
+    let text: String
+    var placeholder = ""
+    var enabled = true
+    @Binding var editing: Bool
+    let onCommit: (String) -> Void
+    @State private var draft = ""
+    @State private var hovering = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        if editing {
+            TextField(placeholder, text: $draft)
+                .textFieldStyle(.plain).focused($focused)
+                .onSubmit(commit)
+                .onExitCommand { editing = false }
+                .onChange(of: focused) { _, isFocused in if !isFocused, editing { commit() } }
+                .onAppear { draft = text; focused = true }
+                .accessibilityLabel("Note name")
+        } else {
+            HStack(spacing: 7) {
+                Text(text.isEmpty ? placeholder : text).lineLimit(1)
+                if enabled {
+                    Image(systemName: "pencil").font(.system(size: 11)).foregroundStyle(LivePalette.secondary)
+                        .opacity(hovering ? 1 : 0).accessibilityHidden(true)
+                }
+            }
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
+            .onTapGesture { if enabled { editing = true } }
+            .help(enabled ? "Click to rename" : "")
+            .accessibilityAddTraits(enabled ? .isButton : [])
+            .accessibilityHint(enabled ? "Rename" : "")
+            .accessibilityAction { if enabled { editing = true } }
+        }
+    }
+
+    private func commit() {
+        guard editing else { return }
+        editing = false
+        let name = draft.components(separatedBy: .newlines).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty, name != text { onCommit(name) }
+    }
+}
+
 enum LiveNote {
     static func isActive(_ state: NoteRecorder.State) -> Bool {
         switch state {
-        case .starting, .recording, .finishing: true
+        case .starting, .recording, .paused, .finishing: true
         case .idle, .failed: false
         }
     }

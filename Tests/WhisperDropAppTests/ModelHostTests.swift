@@ -20,7 +20,7 @@ final class ModelHostTests: XCTestCase {
             _ = try await host.transcribe([0, 0, 0], model: parakeet, language: "ja", shortClip: true)
             XCTFail("Japanese should be refused for Parakeet")
         } catch {
-            XCTAssertEqual(error.localizedDescription, "Parakeet v3 does not transcribe Japanese. Choose a Whisper model in Settings.")
+            XCTAssertEqual(error.localizedDescription, "Parakeet v3 does not transcribe Japanese. Choose a legacy Whisper model in Settings, Models.")
         }
         XCTAssertFalse(launched)
         XCTAssertEqual(host.state, .unloaded)

@@ -54,8 +54,9 @@ public extension TranscriptOutput {
         return ServerTranscription(segments: segments, language: output.language)
     }
     /// Plain text; when segments carry speakers, consecutive lines by the same speaker are grouped under "You:" / "Others:" labels.
-    static func labeledText(_ segments: [TranscriptSegment]) -> String {
-        let rows = paragraphs(segments).filter {
+    /// `eachSentence` keeps every segment as its own paragraph, for notes decoded while recording.
+    static func labeledText(_ segments: [TranscriptSegment], eachSentence: Bool = false) -> String {
+        let rows = paragraphs(segments, eachSentence: eachSentence).filter {
             !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
         guard rows.contains(where: { $0.speaker != nil }) else {
@@ -81,10 +82,10 @@ public extension TranscriptOutput {
     }
 
     /// Reading paragraphs are independent of inference and subtitle segment boundaries.
-    static func paragraphs(_ segments: [TranscriptSegment], targetCharacters: Int = 420) -> [TranscriptSegment] {
+    static func paragraphs(_ segments: [TranscriptSegment], targetCharacters: Int = 420, eachSentence: Bool = false) -> [TranscriptSegment] {
         var result: [TranscriptSegment] = []
         for segment in segments where !segment.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            guard var last = result.last else { result.append(segment); continue }
+            guard var last = result.last, !eachSentence else { result.append(segment); continue }
             let complete = endsSentence(last.text)
             let newParagraph = last.speaker != segment.speaker
                 || (complete && (segment.start - last.end >= 3 || last.text.count >= targetCharacters))
@@ -99,7 +100,7 @@ public extension TranscriptOutput {
         }
     }
 
-    private static func endsSentence(_ text: String) -> Bool {
+    static func endsSentence(_ text: String) -> Bool {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "\"'”’)]}"))
         guard !value.hasSuffix(".."), let last = value.last else { return false }

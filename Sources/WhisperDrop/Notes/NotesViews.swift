@@ -8,6 +8,7 @@ struct LiveNoteView: View {
     @EnvironmentObject private var recorder: NoteRecorder
     @State private var confirmDiscard = false
     @State private var following = true
+    @State private var editingTitle = false
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -33,8 +34,9 @@ struct LiveNoteView: View {
     private var header: some View {
         HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 5) {
-                TextField(LiveFormat.noteTitle(), text: $recorder.title)
-                    .textFieldStyle(.plain).font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                EditableTitle(text: recorder.title, placeholder: LiveFormat.noteTitle(), enabled: recorder.state != .finishing,
+                              editing: $editingTitle) { recorder.title = $0 }
+                    .font(.system(size: 17, weight: .semibold))
                 HStack(spacing: 6) {
                     Image(systemName: LiveNote.symbol(recorder.sources))
                     Text(recorder.sources.label)
@@ -54,8 +56,10 @@ struct LiveNoteView: View {
     private var waiting: some View {
         VStack(spacing: 16) {
             LiveLevelBars(level: max(recorder.micLevel, recorder.systemLevel), active: recorder.state == .recording, maxHeight: 28)
-            Text(recorder.state == .starting ? "Starting…" : "Listening.").font(.system(size: 24, weight: .medium))
-            Text(isFailed ? failure : "Text appears after a pause, or after about a minute of continuous speech.")
+            Text(recorder.state == .starting ? "Starting…" : recorder.state == .paused ? "Paused." : "Listening.").font(.system(size: 24, weight: .medium))
+            Text(isFailed ? failure : recorder.state == .paused ? "Nothing is recorded until you resume."
+                 : recorder.streaming ? "Text appears a few seconds after it is spoken, one sentence per paragraph."
+                 : "Text appears after a pause, or after about a minute of continuous speech.")
                 .font(.system(size: 13)).foregroundStyle(isFailed ? Color.red : LivePalette.secondary)
                 .multilineTextAlignment(.center).frame(maxWidth: 390)
         }.padding(32).frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -69,14 +73,14 @@ struct LiveNoteView: View {
                         HStack {
                             Text("Live transcript").font(.system(size: 12, weight: .medium)).foregroundStyle(LivePalette.secondary)
                             Spacer()
-                            if recorder.pendingChunks > 1 {
+                            if recorder.pendingChunks > 1 || recorder.lagSeconds > 20 {
                                 HStack(spacing: 6) {
                                     ProgressView().controlSize(.mini)
-                                    Text("Catching up… \(recorder.pendingChunks)").monospacedDigit()
+                                    Text(recorder.streaming ? "Catching up…" : "Catching up… \(recorder.pendingChunks)").monospacedDigit()
                                 }.font(.system(size: 11)).foregroundStyle(LivePalette.secondary)
                             }
                         }.padding(.bottom, 8)
-                        ForEach(TranscriptOutput.paragraphs(recorder.segments)) { segment in
+                        ForEach(TranscriptOutput.paragraphs(recorder.segments, eachSentence: recorder.streaming)) { segment in
                             HStack(alignment: .firstTextBaseline, spacing: 14) {
                                 Text(segment.timeLabel).font(.system(size: 11)).monospacedDigit().foregroundStyle(LivePalette.secondary).frame(width: 44, alignment: .leading)
                                 if let speaker = segment.speaker {
@@ -86,7 +90,7 @@ struct LiveNoteView: View {
                                 Text(segment.text).font(.system(size: 16)).lineSpacing(7).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                             }.id(segment.id)
                         }
-                        // Words heard since the last confirmed paragraph. Replaced by confirmed text as chunks finish.
+                        // Words heard after the last settled word. They join the transcript once they settle.
                         ForEach(recorder.livePreview) { preview in
                             HStack(alignment: .firstTextBaseline, spacing: 14) {
                                 Text("Live").font(.system(size: 11)).foregroundStyle(LivePalette.secondary).frame(width: 44, alignment: .leading)
@@ -143,10 +147,18 @@ struct LiveNoteView: View {
                 Text("Saving the note…").font(.system(size: 12)).foregroundStyle(LivePalette.secondary)
             } else {
                 Button("Discard") { confirmDiscard = true }.buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(LivePalette.secondary)
-                    .disabled(recorder.state != .recording && recorder.state != .starting)
+                    .disabled(recorder.state != .recording && recorder.state != .starting && recorder.state != .paused)
+                if recorder.state == .paused {
+                    Button(action: recorder.resume) { Label("Resume", systemImage: "record.circle") }
+                        .buttonStyle(LiveQuietButton()).help("Continue recording this note")
+                } else {
+                    Button(action: recorder.pause) { Label("Pause", systemImage: "pause.fill") }
+                        .buttonStyle(LiveQuietButton()).disabled(recorder.state != .recording)
+                        .help("Stop recording for now. The note stays open.")
+                }
                 Button(action: recorder.stop) { Label("Stop and save", systemImage: "stop.fill") }
-                    .buttonStyle(LiveGreenButton()).keyboardShortcut(.cancelAction)
-                    .disabled(recorder.state != .recording)
+                    .buttonStyle(LiveGreenButton()).keyboardShortcut(editingTitle ? nil : .cancelAction)
+                    .disabled(recorder.state != .recording && recorder.state != .paused)
             }
         }.padding(16).modifier(LiveControlSurface())
     }
@@ -164,6 +176,7 @@ struct LiveNoteView: View {
         switch recorder.state {
         case .recording: LivePalette.green
         case .starting, .finishing: LivePalette.green.opacity(0.45)
+        case .paused: LivePalette.secondary
         case .failed: .red
         case .idle: LivePalette.secondary
         }
@@ -173,6 +186,7 @@ struct LiveNoteView: View {
         case .idle: "Stopped"
         case .starting: "Starting"
         case .recording: "Recording"
+        case .paused: "Paused"
         case .finishing: "Saving"
         case .failed: "Failed"
         }
@@ -210,7 +224,7 @@ struct NewNoteButton: View {
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: active ? "record.circle.fill" : "record.circle").foregroundStyle(active ? LivePalette.green : .white)
-                    Text(active ? "Recording" : "New note")
+                    Text(recorder.state == .paused ? "Paused" : active ? "Recording" : "New note")
                 }.frame(maxWidth: .infinity)
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden)

@@ -137,7 +137,7 @@ final class ModelHost: ObservableObject {
                     boostQuietAudio: Bool = false) async throws -> ServerTranscription {
         if isShutDown { throw AppFailure("WhisperDrop is quitting.") }
         guard model.supports(language: language) else {
-            throw AppFailure("\(model.name) does not transcribe \(LiveFormat.language(language)). Choose a Whisper model in Settings.")
+            throw AppFailure("\(model.name) does not transcribe \(LiveFormat.language(language)). Choose a legacy Whisper model in Settings, Models.")
         }
         pending += 1
         let cancel = RequestCancel()

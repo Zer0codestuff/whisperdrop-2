@@ -1,13 +1,17 @@
 import Foundation
 import WhisperDropCore
 
-/// Records a meeting or lecture and transcribes it incrementally.
+/// Records a meeting or lecture and transcribes it while it records.
+///
+/// Parakeet notes stream. Each source's audio grows in a `RollingAudio`, `LiveText` decodes short windows of it,
+/// and every settled word joins the transcript, one sentence per paragraph, with no time limit. Whisper (legacy)
+/// notes cut the audio into chunks at pauses, at most 60 seconds long, and transcribe each chunk.
 @MainActor
 final class NoteRecorder: ObservableObject {
-    enum State: Equatable { case idle, starting, recording, finishing, failed(String) }
+    enum State: Equatable { case idle, starting, recording, paused, finishing, failed(String) }
     @Published private(set) var state: State = .idle
     @Published private(set) var sources: NoteSources = .both
-    /// Seconds since the recording started.
+    /// Recorded seconds. Paused time does not count.
     @Published private(set) var elapsed: Double = 0
     /// Live merged transcript so far.
     @Published private(set) var segments: [TranscriptSegment] = []
@@ -20,13 +24,18 @@ final class NoteRecorder: ObservableObject {
     @Published private(set) var warning: String?
     @Published var showLanguageReminder = false
     @Published private(set) var sessionLanguage = "auto"
-    /// Words heard after the last transcribed chunk. Removed as chunks covering them are transcribed.
+    /// True for Parakeet notes, which are decoded as the audio grows instead of in chunks.
+    @Published private(set) var streaming = false
+    /// Recorded seconds not settled yet, in the stream furthest behind. About six while streaming keeps up.
+    @Published private(set) var lagSeconds: Double = 0
+    /// Words heard after the last settled word. They can still change.
     @Published private(set) var livePreview: [NoteLivePreview] = []
-    private var previewTask: Task<Void, Never>?
-    private var lastPreview: ContinuousClock.Instant?
     private var liveText: [NoteStream: LiveText] = [:]
-    /// End of the audio each stream's transcribed chunks cover, in recording seconds.
-    private var coveredUntil: [NoteStream: Double] = [:]
+    private var streamAudio: [NoteStream: RollingAudio] = [:]
+    private var sentences: [NoteStream: SentenceParagraphs] = [:]
+    /// Recorded seconds before the current stretch of recording.
+    private var activeBefore: Double = 0
+    private var pauseCount = 0
     private var pendingStart: NoteSources?
     private var sessionVocabulary = ""
     private var sessionKeepAudio = true
@@ -127,13 +136,15 @@ final class NoteRecorder: ObservableObject {
         guard state == .idle, canStartRecording() else { return }
         let model = settings.model(for: .notes)
         guard model.supports(language: settings.noteLanguage) else {
-            state = .failed("\(model.name) does not transcribe \(LiveFormat.language(settings.noteLanguage)). Choose a Whisper model in Settings, Models.")
+            state = .failed("\(model.name) does not transcribe \(LiveFormat.language(settings.noteLanguage)). Download a legacy Whisper model in Settings, Models.")
             return
         }
         guard modelInstalled(model) else {
             state = .failed("Download \(model.name) in Settings, Models before recording a note.")
             return
         }
+        sessionModel = model
+        streaming = model.engine == .parakeet
         sessionLanguage = settings.noteLanguage
         settings.nextNoteLanguage = nil
         sessionVocabulary = settings.noteVocabulary
@@ -154,14 +165,54 @@ final class NoteRecorder: ObservableObject {
         }
     }
 
+    /// Stops capture and transcribes what was recorded so far. Recording continues in the same note on `resume`.
+    /// While paused the model can unload according to the idle setting.
+    func pause() {
+        guard state == .recording else { return }
+        updateElapsed()
+        activeBefore = elapsed
+        startedAt = nil
+        state = .paused
+        pauseCount += 1
+        haltCapture()
+        drainPendingAudio(flush: true)
+        micLevel = 0
+        systemLevel = 0
+        wake.signal()
+    }
+
+    /// Restarts the sources that were recording, appending to the same audio files and transcript.
+    func resume() {
+        guard state == .paused, let model = sessionModel else { return }
+        var errors: [String] = []
+        if microphoneActive, let writer = youWriter {
+            do { microphone = try startSource(system: false, writer: writer) } catch { errors.append(error.localizedDescription) }
+        }
+        if systemActive, let writer = othersWriter {
+            do { systemTap = try startSource(system: true, writer: writer) } catch { errors.append(error.localizedDescription) }
+        }
+        let detail = errors.filter { !$0.isEmpty }.joined(separator: " ")
+        guard microphone != nil || systemTap != nil else {
+            captureWarning = "Recording could not resume. \(detail)".trimmingCharacters(in: .whitespaces)
+            publishWarning()
+            return
+        }
+        if !errors.isEmpty {
+            captureWarning = "\(microphone == nil ? "The microphone" : "System audio") did not resume. \(detail)".trimmingCharacters(in: .whitespaces)
+            publishWarning()
+        }
+        if lease == nil { lease = host.acquireLease() }
+        host.prewarm(model)
+        didFlushChunkers = false
+        startedAt = clock.now
+        state = .recording
+    }
+
     /// Stops capture, transcribes remaining audio, then calls `onFinish`.
     func stop() {
-        guard state == .starting || state == .recording else { return }
+        guard state == .starting || state == .recording || state == .paused else { return }
         updateElapsed()
         state = .finishing
-        previewTask?.cancel()
-        liveText = [:]
-        livePreview = []
         stopRequested = true
         haltCapture()
         drainPendingAudio(flush: true)
@@ -192,7 +243,7 @@ final class NoteRecorder: ObservableObject {
     /// spinning can finish the note. This method does not wait for that loop.
     func finishForTermination() {
         terminationHandoff = true
-        if state == .starting || state == .recording {
+        if state == .starting || state == .recording || state == .paused {
             updateElapsed()
             state = .finishing
             stopRequested = true
@@ -225,8 +276,7 @@ final class NoteRecorder: ObservableObject {
             return
         }
 
-        let model = settings.model(for: .notes)
-        sessionModel = model
+        guard let model = sessionModel else { return }
         lease = host.acquireLease()
         host.prewarm(model)
 
@@ -272,7 +322,7 @@ final class NoteRecorder: ObservableObject {
             haltCapture()
             drainPendingAudio(flush: true)
         }
-        await processUntilStopped(token: token)
+        if streaming { await streamUntilStopped(token: token) } else { await processUntilStopped(token: token) }
         await finishIfNeeded(token: token)
     }
 
@@ -353,37 +403,18 @@ final class NoteRecorder: ObservableObject {
         } catch {
             return .failed(error.localizedDescription)
         }
-        let pending = system ? systemPending : micPending
         do {
+            let source = try startSource(system: system, writer: writer)
+            guard token == generation, !discardRequested, !stopRequested else {
+                source.stop()
+                writer.close()
+                return .aborted
+            }
             if system {
-                let tap = captures.makeSystemTap()
-                tap.onSamples = { samples in
-                    writer.append(samples)
-                    pending.append(samples)
-                }
-                tap.onLevel = { level in pending.setLevel(level) }
-                try tap.start()
-                guard token == generation, !discardRequested, !stopRequested else {
-                    tap.stop()
-                    writer.close()
-                    return .aborted
-                }
-                systemTap = tap
+                systemTap = source
                 othersWriter = writer
             } else {
-                let mic = captures.makeMicrophone()
-                mic.onSamples = { samples in
-                    writer.append(samples)
-                    pending.append(samples)
-                }
-                mic.onLevel = { level in pending.setLevel(level) }
-                try mic.start()
-                guard token == generation, !discardRequested, !stopRequested else {
-                    mic.stop()
-                    writer.close()
-                    return .aborted
-                }
-                microphone = mic
+                microphone = source
                 youWriter = writer
             }
             return .started
@@ -392,6 +423,26 @@ final class NoteRecorder: ObservableObject {
             try? FileManager.default.removeItem(at: url)
             return .failed(error.localizedDescription)
         }
+    }
+
+    /// Starts one source writing to `writer` and to the samples the recorder drains.
+    private func startSource(system: Bool, writer: AudioFileWriter) throws -> any NoteCaptureSource {
+        if system && !captures.systemAudioSupported() { throw NoteCaptureError.unsupportedSystemAudio }
+        let pending = system ? systemPending : micPending
+        let source = system ? captures.makeSystemTap() : captures.makeMicrophone()
+        source.onSamples = { samples in
+            writer.append(samples)
+            pending.append(samples)
+        }
+        source.onLevel = { level in pending.setLevel(level) }
+        do {
+            try source.start()
+        } catch {
+            source.onSamples = nil
+            source.onLevel = nil
+            throw error
+        }
+        return source
     }
 
     private func startTicker() {
@@ -406,79 +457,34 @@ final class NoteRecorder: ObservableObject {
     }
 
     private func tick() {
-        guard state == .recording || state == .finishing else { return }
+        guard state == .recording || state == .paused || state == .finishing else { return }
         updateElapsed()
         checkCaptureHealth()
         drainPendingAudio(flush: false)
-        refreshPreviewIfDue()
         savePartialIfDue()
     }
 
-    /// Parakeet decodes 20 seconds in a fraction of a second, so the open audio can be shown while it grows.
-    /// `LiveText` settles words as audio follows them, so the preview covers everything since the last chunk
-    /// while each request stays short. Previews run only when no chunk waits, and a chunk queued meanwhile
-    /// waits for at most one preview request.
-    private func refreshPreviewIfDue() {
-        if !settings.noteLiveText {
-            if previewTask != nil || !livePreview.isEmpty || !liveText.isEmpty {
-                previewTask?.cancel()
-                liveText = [:]
-                livePreview = []
-            }
+    private func publishPreview() {
+        guard settings.noteLiveText else {
+            livePreview = []
             return
         }
-        guard state == .recording, let model = sessionModel, model.engine == .parakeet,
-              previewTask == nil, queue.isEmpty, !inFlight else { return }
-        if let lastPreview, NoteClock.seconds(clock.now - lastPreview) < 1.5 { return }
-        lastPreview = clock.now
-        let requests: [(NoteStream, Range<Double>, AudioChunk)] = [(NoteStream.microphone, micChunker), (.system, systemChunker)].compactMap { stream, chunker in
-            let live = liveText[stream] ?? LiveText(start: chunker.openStart)
-            guard let window = live.window(audioStart: chunker.openStart, end: chunker.openEnd),
-                  let audio = chunker.openAudio(window) else { return nil }
-            return (stream, window, audio)
-        }
-        guard !requests.isEmpty else { return }
-        let language = NoteLanguage.requestCode(setting: sessionLanguage, pinned: transcript.pinnedLanguage)
-        let token = generation
-        previewTask = Task { @MainActor [weak self] in
-            defer { if self?.generation == token { self?.previewTask = nil } }
-            for (stream, window, audio) in requests {
-                guard let self, !Task.isCancelled, token == self.generation, self.state == .recording,
-                      self.settings.noteLiveText, self.queue.isEmpty, !self.inFlight else { return }
-                var words: [TranscriptWord] = []
-                if audio.hasSpeech {
-                    guard let result = try? await self.host.transcribe(audio.samples, model: model, language: language, offset: audio.start, checkSilence: false),
-                          !Task.isCancelled, token == self.generation, self.state == .recording, self.settings.noteLiveText else { continue }
-                    words = result.timedWords
-                }
-                var live = self.liveText[stream] ?? LiveText(start: window.lowerBound)
-                live.accept(words, window: window)
-                // A chunk transcribed meanwhile already covers its words.
-                if let covered = self.coveredUntil[stream] { live.discard(through: covered) }
-                self.liveText[stream] = live
-            }
-            self?.publishPreview()
-        }
-    }
-
-    private func publishPreview() {
         livePreview = [NoteStream.microphone, .system].compactMap { stream in
-            guard let text = liveText[stream]?.text, !text.isEmpty else { return nil }
+            let text = LiveText.join(liveText[stream]?.pending ?? [])
+            guard !text.isEmpty else { return nil }
             return NoteLivePreview(speaker: NoteSpeakers.label(stream: stream, bothLive: labelingSpeakers), text: text)
         }
     }
 
     private func updateElapsed() {
-        guard !stopRequested, let startedAt else { return }
-        elapsed = NoteClock.seconds(clock.now - startedAt)
+        guard !stopRequested else { return }
+        elapsed = activeBefore + (startedAt.map { NoteClock.seconds(clock.now - $0) } ?? 0)
     }
 
     private func drainPendingAudio(flush: Bool) {
         let mic = micPending.drain()
         if let level = mic.level { micLevel = level }
-        if !mic.samples.isEmpty {
-            enqueue(micChunker.append(mic.samples), stream: .microphone)
-        }
+        if !mic.samples.isEmpty { take(mic.samples, stream: .microphone) }
         let system = systemPending.drain()
         if let level = system.level { systemLevel = level }
         if !system.samples.isEmpty {
@@ -486,12 +492,22 @@ final class NoteRecorder: ObservableObject {
                 confirmedSystemAudio = true
                 defaults.set(true, forKey: NoteCopy.systemAudioConfirmedKey)
             }
-            enqueue(systemChunker.append(system.samples), stream: .system)
+            take(system.samples, stream: .system)
         }
-        guard flush, !didFlushChunkers else { return }
+        guard flush, !streaming, !didFlushChunkers else { return }
         didFlushChunkers = true
         if let tail = micChunker.flush() { enqueue([tail], stream: .microphone) }
         if let tail = systemChunker.flush() { enqueue([tail], stream: .system) }
+    }
+
+    private func take(_ samples: [Float], stream: NoteStream) {
+        if streaming {
+            streamAudio[stream, default: RollingAudio()].append(samples)
+        } else if stream == .microphone {
+            enqueue(micChunker.append(samples), stream: stream)
+        } else {
+            enqueue(systemChunker.append(samples), stream: stream)
+        }
     }
 
     private func enqueue(_ chunks: [AudioChunk], stream: NoteStream) {
@@ -522,9 +538,103 @@ final class NoteRecorder: ObservableObject {
                 publishPending()
             }
             if token != generation || discardRequested || stopRequested { return }
+            // Everything recorded before the pause is transcribed. The model may unload until recording resumes.
+            if state == .paused { releaseModel() }
             if await iterator.next() == nil { return }
         }
     }
+
+    // MARK: Streaming
+
+    /// Decodes each source's newest audio about every 1.5 seconds until the note stops. Each pause first
+    /// settles every word recorded so far, then lets the model unload while nothing is recorded.
+    private func streamUntilStopped(token: Int) async {
+        var settledPauses = 0
+        while token == generation, !discardRequested, !stopRequested {
+            let began = clock.now
+            if state == .paused {
+                if settledPauses != pauseCount {
+                    settledPauses = pauseCount
+                    await streamStep(token: token, final: true)
+                    if state == .paused { releaseModel() }
+                }
+            } else {
+                await streamStep(token: token, final: false)
+            }
+            let wait = 1.5 - NoteClock.seconds(clock.now - began)
+            if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+        }
+    }
+
+    /// One request per source. A final step repeats until every word recorded so far is settled.
+    private func streamStep(token: Int, final: Bool) async {
+        guard let model = sessionModel else { return }
+        let language = NoteLanguage.requestCode(setting: sessionLanguage, pinned: nil)
+        for stream in [NoteStream.microphone, .system] {
+            // A final step covers the audio recorded when it began, even if recording resumes meanwhile.
+            guard let end = streamAudio[stream]?.end else { continue }
+            while token == generation, !discardRequested, let audio = streamAudio[stream] {
+                var live = liveText[stream] ?? LiveText(start: audio.start)
+                guard let window = live.window(audioStart: audio.start, end: end), let chunk = audio.audio(window) else { break }
+                var words: [TranscriptWord] = []
+                if chunk.hasSpeech {
+                    sawSpeech = true
+                    do {
+                        words = try await decode(chunk, model: model, language: language, stream: stream, attempts: final ? 2 : 1)
+                    } catch {
+                        guard token == generation, !discardRequested, !Task.isCancelled else { return }
+                        // A short window is tried again with more audio. A full one is skipped so the note keeps up.
+                        if !final, window.upperBound - window.lowerBound < live.maxWindow - 0.5 { break }
+                        noteChunkFailure()
+                    }
+                    guard token == generation, !discardRequested else { return }
+                }
+                live.accept(words, window: window, final: final && window.upperBound >= end)
+                commit(live.takeSettled(), stream: stream)
+                liveText[stream] = live
+                streamAudio[stream]?.discard(before: live.settledUntil - live.leftContext - 1)
+                publishPreview()
+                if !final || live.settledUntil >= end { break }
+            }
+        }
+        lagSeconds = [NoteStream.microphone, .system].compactMap { stream in
+            streamAudio[stream].map { $0.end - (liveText[stream]?.settledUntil ?? $0.start) }
+        }.max() ?? 0
+    }
+
+    private func decode(_ chunk: AudioChunk, model: TranscriptionModel, language: String, stream: NoteStream,
+                        attempts: Int) async throws -> [TranscriptWord] {
+        let speaker = NoteSpeakers.label(stream: stream, bothLive: labelingSpeakers)
+        let boost = sessionAudioBoost
+        var attempt = 1
+        while true {
+            let task = Task { @MainActor in
+                try await self.host.transcribe(chunk.samples, model: model, language: language, offset: chunk.start, speaker: speaker,
+                                               checkSilence: false, boostQuietAudio: boost)
+            }
+            transcribeTask = task
+            do {
+                let result = try await task.value
+                transcribeTask = nil
+                if let message = host.speechCheckWarning { transcriptionWarning = message; publishWarning() }
+                return result.timedWords
+            } catch {
+                transcribeTask = nil
+                if attempt >= attempts || Task.isCancelled || error is CancellationError { throw error }
+                attempt += 1
+            }
+        }
+    }
+
+    private func commit(_ words: [TranscriptWord], stream: NoteStream) {
+        guard !words.isEmpty else { return }
+        let speaker = NoteSpeakers.label(stream: stream, bothLive: labelingSpeakers)
+        sentences[stream, default: SentenceParagraphs(speaker: speaker)].append(words)
+        let mic = sentences[.microphone]?.segments ?? [], system = sentences[.system]?.segments ?? []
+        segments = labelingSpeakers ? TranscriptMerger.merge(you: mic, others: system) : NoteJobs.renumber(mic + system)
+    }
+
+    // MARK: Chunks
 
     private func transcribe(_ item: NoteQueuedChunk, token: Int) async {
         let model = sessionModel ?? settings.model(for: .notes)
@@ -551,13 +661,6 @@ final class NoteRecorder: ObservableObject {
         guard token == generation, !discardRequested else { return }
         if let message = host.speechCheckWarning { transcriptionWarning = message; publishWarning() }
         segments = transcript.accept(result, stream: item.stream, languageSetting: sessionLanguage, chunk: item.chunk)
-        let covered = item.chunk.stableUntil ?? (item.chunk.start + item.chunk.duration)
-        coveredUntil[item.stream] = max(coveredUntil[item.stream] ?? 0, covered)
-        if var live = liveText[item.stream] {
-            live.discard(through: covered)
-            liveText[item.stream] = live
-            publishPreview()
-        }
     }
 
     private func transcribeOnce(samples: [Float], model: TranscriptionModel, language: String, prompt: String?, offset: Double, speaker: Speaker?) async throws -> ServerTranscription {
@@ -600,8 +703,9 @@ final class NoteRecorder: ObservableObject {
         state = .finishing
         haltCapture()
         drainPendingAudio(flush: true)
-        await processUntilStopped(token: token)
+        if streaming { await streamStep(token: token, final: true) } else { await processUntilStopped(token: token) }
         guard token == generation, !discardRequested else { return }
+        livePreview = []
         tickerTask?.cancel()
         tickerTask = nil
         updateElapsed()
@@ -620,7 +724,8 @@ final class NoteRecorder: ObservableObject {
             duration: elapsed,
             keepAudio: keepAudio,
             detectedSpeech: sawSpeech,
-            transcriptionWarning: warning
+            transcriptionWarning: warning,
+            sentenceParagraphs: streaming
         )
         releaseModel()
         // With Keep model ready, put dictation's own model back once the note's model is no longer needed.
@@ -709,12 +814,14 @@ final class NoteRecorder: ObservableObject {
     private func resetFields() {
         elapsed = 0
         segments = []
-        previewTask?.cancel()
-        previewTask = nil
+        streaming = false
+        lagSeconds = 0
         liveText = [:]
-        coveredUntil = [:]
+        streamAudio = [:]
+        sentences = [:]
         livePreview = []
-        lastPreview = nil
+        activeBefore = 0
+        pauseCount = 0
         micLevel = 0
         systemLevel = 0
         pendingChunks = 0

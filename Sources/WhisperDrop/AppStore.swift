@@ -30,7 +30,7 @@ final class AppStore: ObservableObject {
     var audioBoostEnabled: () -> Bool = { true }
     var spokenLanguage: () -> String = { "auto" }
     /// The file model chosen in Settings, Models.
-    var fileModel: () -> TranscriptionModel = { TranscriptionModel.catalog.first { $0.id == "turbo" }! }
+    var fileModel: () -> TranscriptionModel = { TranscriptionModel.catalog[0] }
     let modelsFolder: URL
     var outputFolder: URL { savedFolder.appendingPathComponent("Transcripts", isDirectory: true) }
     var audioFolder: URL { savedFolder.appendingPathComponent("Audio", isDirectory: true) }
@@ -170,7 +170,7 @@ final class AppStore: ObservableObject {
         save()
     }
     func transcriptText(_ job: TranscriptionJob) -> String {
-        job.resolvedKind == .note ? TranscriptOutput.labeledText(job.segments) : job.transcript
+        job.resolvedKind == .note ? TranscriptOutput.labeledText(job.segments, eachSentence: job.sentenceParagraphs == true) : job.transcript
     }
 
     /// Commit before publishing, so failed writes never appear as saved results.
@@ -256,7 +256,7 @@ final class AppStore: ObservableObject {
             defer { busy = false; status = "Ready"; progress = 0; work = nil; fileHost?.unload(); save() }
             do {
                 guard chosenModel.supports(language: chosenLanguage) else {
-                    throw AppFailure("\(chosenModel.name) does not transcribe \(LiveFormat.language(chosenLanguage)). Choose a Whisper model in Settings, Models.")
+                    throw AppFailure("\(chosenModel.name) does not transcribe \(LiveFormat.language(chosenLanguage)). Download a legacy Whisper model in Settings, Models.")
                 }
                 let modelURL = try await ensureModel(chosenModel)
                 for id in ids {

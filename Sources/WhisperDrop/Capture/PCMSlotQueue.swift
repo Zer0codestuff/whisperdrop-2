@@ -62,7 +62,9 @@ final class PCMSlotQueue: @unchecked Sendable {
         phases.initialize(repeating: Self.empty, count: Self.slotCount)
         sequences = .allocate(capacity: Self.slotCount)
         sequences.initialize(repeating: 0, count: Self.slotCount)
-        worker = DispatchQueue(label: label)
+        // 32 slots hold about 640 ms. Streaming notes keep decoding and preprocessing at user-initiated priority,
+        // so the worker must not wait behind them.
+        worker = DispatchQueue(label: label, qos: .userInteractive)
         worker.setSpecific(key: workerKey, value: 1)
     }
 
