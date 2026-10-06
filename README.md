@@ -119,7 +119,7 @@ Parakeet v3 is NVIDIA's Parakeet TDT 0.6B v3, run by the bundled `parakeet-serve
 
 Dictation and notes share a resident model process. It unloads after 10 minutes idle by default. **Settings > Models > Unload model** offers other intervals; **Keep model ready** in the menu bar is the same setting as its **Keep model ready** choice. When dictation and notes use different models, switching between them reloads the process.
 
-Lecture notes wait for pauses, with a 60-second limit per request. Forced cuts retain two seconds of audio to help complete words at the boundary. Read the [lecture transcription tests](docs/note-transcription.md) for measured results and remaining limitations.
+With Parakeet, notes stream without chunks and start a paragraph at each sentence end. With legacy Whisper models, lecture notes wait for pauses, with a 60-second limit per request. Forced cuts retain two seconds of audio to help complete words at the boundary. Read the [lecture transcription tests](docs/note-transcription.md) for measured results and remaining limitations.
 
 ### Build and run
 
