@@ -161,7 +161,7 @@ extension Permissions.Kind {
     var purpose: String {
         switch self {
         case .microphone: "Hears you while you dictate, and records You in notes."
-        case .accessibility: "Pastes dictated text into the app you are using."
+        case .accessibility: "Pastes dictation and reads or replaces selected text with Writing tools."
         case .inputMonitoring: "Notices the dictation key while other apps are in front."
         case .systemAudio: "Records Others in a call. macOS asks the first time a note uses it."
         }

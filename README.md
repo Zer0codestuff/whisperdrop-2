@@ -17,6 +17,7 @@ Turn recordings, videos and meetings into text, right on your Mac. Record a lect
 - Record lectures, calls and meetings using your microphone, system audio, or both. The transcript appears as you record.
 - Save notes in your library, rename them, and optionally keep the original audio. When recording both sources, the transcript labels them as You and Others.
 - Dictate into other apps by holding a shortcut key. The words appear where your cursor is.
+- Revise selected text with a shortcut using Draft's local writing tools. Review grammar, tone and wording suggestions, or summarize and organize transcripts as separate saved versions.
 - Choose the spoken language once for files, dictation and notes, or let the app detect it. Add subject terms and names in Settings to help recognition.
 - Read transcripts with timestamps, copy the text, or export plain text and SRT or VTT subtitles.
 - Queue several recordings, cancel processing, retry failures, and return to saved transcripts later.
@@ -43,6 +44,10 @@ Your Mac needs Apple Silicon and macOS 14 or later. Internet access is needed fo
 
 The current release is not notarized by Apple, so macOS may block the first launch. If you trust this build, try opening it once, then go to **System Settings > Privacy & Security > Open Anyway**. See [Apple's instructions](https://support.apple.com/en-us/102445). Updating the app keeps your existing notes, models and settings.
 
+## App updates
+
+Starting with 2.6.0, use **WhisperDrop 2 > Check for Updates…** or **Settings > General > App updates**. Daily checks are optional; installation asks for confirmation. Updating preserves downloaded models, saved files and the main writing draft. The public update feed becomes available with the first signed release. Versions without an updater need one manual replacement first. See [in-app updates](docs/updates.md) for release setup and verified limits.
+
 ## Notes and dictation
 
 Notes use the app language. To record one note in another language, choose it in **Note language** beside **New note**; the next note uses it once. Use **Keep audio** if you also want to save the recording. You can find kept audio later using the note's audio button.
@@ -53,9 +58,21 @@ For dictation, hold **fn** while speaking and release it to insert the text. Wit
 
 On first launch a short guide explains each feature and asks for the permissions they need. You can skip it and reopen it from Help. Microphone access enables voice capture; Accessibility and Input Monitoring enable dictation; system audio access enables recording calls or other audio playing on your Mac.
 
+## Writing tools
+
+Download a text model in **Settings > Models > Text editing**. LFM2.5 2.6B is the default writing model; MiniCPM5 1B is a smaller experimental option. Writing models use GGUF and are separate from the speech models.
+
+Select text in another app and press **Control + Option + D**, or open **Writing tools** from the sidebar to paste text. Review the suggestion, then copy it or replace a verified selection. **Settings > Writing** lets you change the shortcut, edit action instructions, add actions and set your writing style.
+
+The writing editor opens inside the main window and keeps your draft when you return to the library. Temporary selection and dictation panels keep a separate session. **Settings > Models > Text editing** lets you choose Automatic, 8K, 16K or 32K working context. Automatic caps context at 8K on an 8 GB Mac and 16K on a 16 GB Mac; longer texts are processed in sections rather than cut off.
+
+Completed transcripts have a **Writing** menu for summaries and revisions. Saved results are separate text versions; the timed original remains available. The writing panel opens after dictation by default. Automatic note summaries are optional and off by default.
+
+Small local text models can miss details or change meaning. Review suggestions before using them. See [writing methods and checks](docs/writing-tools.md).
+
 ## Privacy
 
-Speech is processed on your device, in the native Mac app or locally in the browser. There are no accounts, analytics, API keys or cloud transcription services.
+Speech and writing requests are processed on your device, in the native Mac app or locally in the browser. There are no accounts, analytics, API keys or cloud transcription services.
 
 Model downloads contact Hugging Face, and YouTube imports contact YouTube. Your notes, transcripts and kept recordings stay on your Mac. Original imported files are never overwritten.
 

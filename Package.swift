@@ -10,11 +10,13 @@ let package = Package(
     ],
     dependencies: [
         // Pinned with the matching mlx.metallib in scripts/prepare-runtime.sh.
-        .package(url: "https://github.com/ml-explore/mlx-swift.git", exact: "0.32.3")
+        .package(url: "https://github.com/ml-explore/mlx-swift.git", exact: "0.32.3"),
+        .package(url: "https://github.com/sparkle-project/Sparkle.git", exact: "2.10.0")
     ],
     targets: [
         .target(name: "WhisperDropCore"),
-        .executableTarget(name: "WhisperDrop", dependencies: ["WhisperDropCore"]),
+        .executableTarget(name: "WhisperDrop", dependencies: ["WhisperDropCore", .product(name: "Sparkle", package: "Sparkle")],
+                          linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
         // Parakeet TDT graph from mlx-audio-swift (MIT), without its Hugging Face loader.
         .target(name: "ParakeetMLX", dependencies: [
             .product(name: "MLX", package: "mlx-swift"),

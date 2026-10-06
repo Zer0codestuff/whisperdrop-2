@@ -172,6 +172,20 @@ final class AppStore: ObservableObject {
     func transcriptText(_ job: TranscriptionJob) -> String {
         job.resolvedKind == .note ? TranscriptOutput.labeledText(job.segments) : job.transcript
     }
+
+    /// Commit before publishing, so failed writes never appear as saved results.
+    func saveTextRevision(_ revision: TextRevision, for id: UUID, original: String) throws {
+        guard libraryReadable, !movingSavedFiles,
+              let index = jobs.firstIndex(where: { $0.id == id && $0.status == .completed }),
+              transcriptText(jobs[index]) == original else {
+            throw AppFailure("This transcript changed or is unavailable. Open it again before saving a text version.")
+        }
+        var revised = jobs
+        revised[index].textRevisions = (revised[index].textRevisions ?? []) + [revision]
+        try JSONEncoder().encode(LibrarySnapshot(savedFolder: savedFolder, jobs: revised, pendingPreviousFolder: pendingPreviousFolder))
+            .write(to: historyURL, options: .atomic)
+        jobs = revised
+    }
     func addYouTube(_ text: String) {
         guard libraryReadable, !importing, !movingSavedFiles else { return }
         guard let url = MediaInput.youtubeURL(text) else { error = "Enter a youtube.com or youtu.be video or playlist link."; return }

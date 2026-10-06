@@ -7,7 +7,10 @@ version="$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/In
 dmg="dist/WhisperDrop-${version}-arm64.dmg"
 staging="$(mktemp -d)"
 trap 'rm -rf "$staging"' EXIT
-cp -R "$app" "$staging/"
+if ! cp -cR "$app" "$staging/"; then
+  rm -rf "$staging/WhisperDrop 2.app"
+  ditto "$app" "$staging/WhisperDrop 2.app"
+fi
 ln -s /Applications "$staging/Applications"
 hdiutil create -volname 'WhisperDrop 2' -srcfolder "$staging" -ov -format UDZO "$dmg"
 identity='-'
@@ -15,5 +18,6 @@ if security find-identity -p codesigning | grep -F '"WhisperDrop 2 Local"' >/dev
   identity='WhisperDrop 2 Local'
 fi
 codesign --force --sign "$identity" "$dmg"
+hdiutil verify "$dmg"
 echo "Wrote ${dmg}"
 echo 'This build is not notarized. Gatekeeper can block a downloaded copy.'

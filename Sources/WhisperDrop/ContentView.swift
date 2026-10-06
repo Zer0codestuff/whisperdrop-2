@@ -14,15 +14,20 @@ struct ContentView: View {
     @EnvironmentObject private var recorder: NoteRecorder
     @EnvironmentObject private var permissions: Permissions
     @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var writing: WritingController
+    @EnvironmentObject private var writingSettings: WritingSettings
     @AppStorage("guideDone") private var guideDone = false
     @State private var targeted = false
     @State private var renamingNote: TranscriptionJob?
+    @State private var displayedRevision: UUID?
     var body: some View {
         HStack(spacing: 0) {
             sidebar.frame(width: 262)
             Rectangle().fill(Palette.line).frame(width: 1)
             if LiveNote.isActive(recorder.state) {
                 LiveNoteView()
+            } else if writing.editorVisible {
+                WritingEditorView()
             } else {
                 libraryColumn
             }
@@ -30,7 +35,9 @@ struct ContentView: View {
         .frame(minWidth: 860, minHeight: 580)
         .background(Color.black)
         .tint(Palette.green)
+        .onChange(of: store.selection) { displayedRevision = nil }
         .onChange(of: recorder.state) {
+            if LiveNote.isActive(recorder.state) { writing.showLibrary() }
             if case .failed(let message) = recorder.state {
                 store.error = message
                 recorder.dismissFailure()
@@ -81,24 +88,24 @@ struct ContentView: View {
                 Text("2").font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.green)
             }.padding(.top, 46).padding(.horizontal, 24)
             HStack(spacing: 8) {
-                Button(action: store.chooseFiles) { Label("Add files", systemImage: "plus").frame(maxWidth: .infinity) }
+                Button { writing.showLibrary(); store.chooseFiles() } label: { Label("Add files", systemImage: "plus").frame(maxWidth: .infinity) }
                     .buttonStyle(QuietButton())
-                Button { store.showLink = true } label: { Image(systemName: "link").frame(width: 24) }
+                Button { writing.showLibrary(); store.showLink = true } label: { Image(systemName: "link").frame(width: 24) }
                     .buttonStyle(QuietButton()).help("Add YouTube video or playlist")
                     .accessibilityLabel("Add YouTube link")
             }.padding(.horizontal, 20).padding(.top, 27)
             NewNoteButton().padding(.horizontal, 20).padding(.top, 8).disabled(store.movingSavedFiles)
             HStack {
-                Text("Library").font(.system(size: 12, weight: .medium))
+                Button("Library", action: writing.showLibrary).buttonStyle(.plain).font(.system(size: 12, weight: .medium))
                 Spacer()
                 Text("\(store.jobs.count)").font(.system(size: 12)).monospacedDigit()
             }.foregroundStyle(Palette.secondary).padding(.horizontal, 24).padding(.top, 30).padding(.bottom, 12)
             ScrollView {
                 LazyVStack(spacing: 5) {
                     ForEach(store.jobs) { job in
-                        Button { store.selection = job.id } label: {
+                        Button { writing.showLibrary(); store.selection = job.id } label: {
                             HStack(alignment: .top, spacing: 10) {
-                                Image(systemName: sidebarSymbol(job)).font(.system(size: 15)).foregroundStyle(store.selection == job.id ? Palette.green : Palette.secondary).frame(width: 20).padding(.top, 2)
+                                Image(systemName: sidebarSymbol(job)).font(.system(size: 15)).foregroundStyle(!writing.editorVisible && store.selection == job.id ? Palette.green : Palette.secondary).frame(width: 20).padding(.top, 2)
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text(job.title).font(.system(size: 13, weight: .medium)).lineLimit(2).multilineTextAlignment(.leading)
                                     HStack(spacing: 5) {
@@ -108,7 +115,7 @@ struct ContentView: View {
                                 }
                                 Spacer(minLength: 0)
                             }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                                .background(store.selection == job.id ? Palette.selected : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+                                .background(!writing.editorVisible && store.selection == job.id ? Palette.selected : Color.clear, in: RoundedRectangle(cornerRadius: 10))
                                 .contentShape(Rectangle())
                         }.buttonStyle(.plain)
                             .contextMenu {
@@ -132,6 +139,13 @@ struct ContentView: View {
                 }.padding(20)
             }
             VStack(alignment: .leading, spacing: 18) {
+                Button {
+                    writing.openEditor()
+                } label: {
+                    HStack { Image(systemName: "text.cursor"); Text("Writing tools"); Spacer() }
+                        .padding(10).background(writing.editorVisible ? Palette.selected : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+                        .foregroundStyle(writing.editorVisible ? Palette.green : Color.white)
+                }.buttonStyle(.plain).font(.system(size: 13)).disabled(LiveNote.isActive(recorder.state))
                 OpenModelsButton {
                     HStack { Image(systemName: "square.stack.3d.up"); Text("Models"); Spacer(); Text(settings.model.name).foregroundStyle(Palette.secondary) }
                         .contentShape(Rectangle())
@@ -178,6 +192,16 @@ struct ContentView: View {
                     .disabled(!store.canRenameNote(job))
             }
             if store.current?.status == .completed {
+                if let job = store.current {
+                    Menu {
+                        Button("Review transcript…") { writing.openTranscript(job) }
+                        Divider()
+                        ForEach(writingSettings.actions) { action in
+                            Button(action.title) { writing.openTranscript(job, actionID: action.id) }
+                        }
+                    } label: { Label("Writing", systemImage: "text.cursor") }
+                        .menuStyle(.borderlessButton).fixedSize().disabled(writing.busy || store.transcriptText(job).isEmpty)
+                }
                 if let job = store.current, job.resolvedKind == .note, let audio = job.audioFile {
                     Button { NSWorkspace.shared.activateFileViewerSelecting(NoteAudio.savedFiles(in: audio)) } label: {
                         Image(systemName: "waveform")
@@ -209,10 +233,37 @@ struct ContentView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     HStack {
-                        Text("Transcript").font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.secondary)
+                        if let versions = job.textRevisions, !versions.isEmpty {
+                            Picker("Text version", selection: $displayedRevision) {
+                                Text("Transcript").tag(nil as UUID?)
+                                ForEach(versions) { version in Text(version.title).tag(version.id as UUID?) }
+                            }.labelsHidden().frame(maxWidth: 260, alignment: .leading)
+                        } else {
+                            Text("Transcript").font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.secondary)
+                        }
                         Spacer()
-                        Text(job.modelName ?? "Whisper").font(.system(size: 11)).foregroundStyle(Palette.secondary)
+                        if writing.processingNotes.contains(job.id) {
+                            ProgressView().controlSize(.small)
+                            Text("Summarizing…").font(.system(size: 11)).foregroundStyle(Palette.secondary)
+                        } else {
+                            Text(job.modelName ?? "Whisper").font(.system(size: 11)).foregroundStyle(Palette.secondary)
+                        }
                     }.padding(.bottom, 8)
+                    if let revision = job.textRevisions?.first(where: { $0.id == displayedRevision }) {
+                        VStack(alignment: .leading, spacing: 16) {
+                            HStack {
+                                Text("\(revision.modelName) · \(revision.created.formatted(date: .abbreviated, time: .shortened))")
+                                    .font(.system(size: 11)).foregroundStyle(Palette.secondary)
+                                Spacer()
+                                Button("Copy version") {
+                                    NSPasteboard.general.prepareForNewContents(with: .currentHostOnly)
+                                    NSPasteboard.general.setString(revision.text, forType: .string)
+                                }.buttonStyle(LiveQuietButton())
+                            }
+                            Text(revision.text).font(.system(size: 16)).lineSpacing(7).textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    } else {
                     if job.segments.isEmpty {
                         Text("No speech was detected in this recording.").foregroundStyle(Palette.secondary)
                     }
@@ -229,6 +280,7 @@ struct ContentView: View {
                             }
                             Text(segment.text).font(.system(size: 16)).lineSpacing(7).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                         }
+                    }
                     }
                 }.padding(36).frame(maxWidth: 900, alignment: .leading).frame(maxWidth: .infinity)
             }

@@ -10,6 +10,11 @@ struct WhisperDropApp: App {
     @StateObject private var permissions: Permissions
     @StateObject private var dictation: DictationController
     @StateObject private var recorder: NoteRecorder
+    @StateObject private var writingSettings: WritingSettings
+    @StateObject private var textModels: TextModelStore
+    @StateObject private var textEngine: TextGenerationEngine
+    @StateObject private var writing: WritingController
+    @StateObject private var updater: AppUpdater
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     private let appDefaults: UserDefaults
     init() {
@@ -17,11 +22,19 @@ struct WhisperDropApp: App {
         let root: URL?
         if let i = arguments.firstIndex(of: "--data-dir"), arguments.indices.contains(i + 1) {
             root = URL(fileURLWithPath: arguments[i + 1])
+        } else if Bundle.main.bundleIdentifier == UpdateConfiguration.verificationBundleID,
+                  let path = Bundle.main.object(forInfoDictionaryKey: "WDUpdateVerificationDataDirectory") as? String {
+            // An isolated update must retain its data directory when Sparkle relaunches without CLI arguments.
+            root = URL(fileURLWithPath: path)
         } else { root = nil }
         let defaults = root == nil ? UserDefaults.standard : UserDefaults(suiteName: "io.github.zer0codestuff.whisperdrop2.verification")!
         appDefaults = defaults
         let store = AppStore(root: root)
         let settings = AppSettings(defaults: defaults)
+        let writingSettings = WritingSettings(defaults: defaults)
+        let textModels = TextModelStore(folder: store.root.appendingPathComponent("TextModels"))
+        let textEngine = TextGenerationEngine(runtime: { try store.tool("llama-server") }, processFile: store.root.appendingPathComponent("text-engine.pid"))
+        let writing = WritingController(settings: writingSettings, models: textModels, engine: textEngine, store: store, defaults: defaults)
         let host = ModelHost(tool: { try store.tool($0) }, modelFile: { model in
             let file = model.location(in: store.modelsFolder)
             guard FileManager.default.fileExists(atPath: file.path) else {
@@ -37,7 +50,7 @@ struct WhisperDropApp: App {
             settings: settings,
             host: host,
             folder: store.audioFolder,
-            onFinish: { store.addNote($0) }, defaults: defaults,
+            onFinish: { store.addNote($0); writing.noteFinished($0) }, defaults: defaults,
             folderProvider: { (audio: store.audioFolder, transcripts: store.outputFolder) }
         )
         store.canMoveSavedFiles = { [weak recorder] in recorder.map { !LiveNote.isActive($0.state) } ?? true }
@@ -47,17 +60,46 @@ struct WhisperDropApp: App {
         recorder.canStartRecording = { [weak store] in store?.canRecordNotes ?? false }
         recorder.modelInstalled = { [weak store] model in store?.downloaded.contains(model.id) ?? false }
         dictation.modelInstalled = { [weak store] model in store?.downloaded.contains(model.id) ?? false }
+        dictation.onBegin = { [weak writing] in writing?.suspendForCapture() }
+        dictation.onComplete = { [weak writing] text, target in writing?.afterDictation(text, target: target) }
+        writing.canGenerate = { [weak dictation, weak recorder] in
+            guard let dictation, let recorder else { return false }
+            return !LiveNote.isActive(recorder.state) && dictation.state == .idle
+        }
+        writing.observeCapture(recorder: recorder, dictation: dictation)
+        let updater = AppUpdater()
+        updater.currentActivity = { [weak store, weak recorder, weak dictation, weak writing, weak textModels] in
+            var activity = UpdateActivity()
+            activity.recording = recorder.map { LiveNote.isActive($0.state) } ?? false
+            activity.dictating = dictation.map { $0.state != .idle } ?? false
+            activity.transcribing = store?.busy ?? false; activity.importing = store?.importing ?? false
+            activity.movingFiles = store?.movingSavedFiles ?? false
+            activity.downloadingModel = store?.downloadingModel != nil || textModels?.downloadingID != nil
+            activity.editing = writing?.hasActiveWritingWork == true
+            activity.replacingText = writing?.replacing ?? false
+            activity.reviewingSelection = writing?.hasOpenReviewPanel ?? false
+            return activity
+        }
+        updater.prepareToRestart = { [weak writing] in try writing?.saveDraftForUpdate() }
+        updater.observe([store.objectWillChange.eraseToAnyPublisher(), recorder.objectWillChange.eraseToAnyPublisher(),
+                         dictation.objectWillChange.eraseToAnyPublisher(), writing.objectWillChange.eraseToAnyPublisher(),
+                         textModels.objectWillChange.eraseToAnyPublisher()])
         _store = StateObject(wrappedValue: store)
         _settings = StateObject(wrappedValue: settings)
         _host = StateObject(wrappedValue: host)
         _permissions = StateObject(wrappedValue: permissions)
         _dictation = StateObject(wrappedValue: dictation)
         _recorder = StateObject(wrappedValue: recorder)
+        _writingSettings = StateObject(wrappedValue: writingSettings)
+        _textModels = StateObject(wrappedValue: textModels)
+        _textEngine = StateObject(wrappedValue: textEngine)
+        _writing = StateObject(wrappedValue: writing)
+        _updater = StateObject(wrappedValue: updater)
     }
     var body: some Scene {
         Window("WhisperDrop 2", id: "main") {
             connected(ContentView())
-                .onOpenURL { url in if url.isFileURL { store.addFiles([url]) } }
+                .onOpenURL { url in if url.isFileURL { writing.showLibrary(); store.addFiles([url]) } }
                 .task { bindDelegate(); await runVerificationIfRequested() }
         }
         .defaultSize(width: 1120, height: 740)
@@ -74,12 +116,20 @@ struct WhisperDropApp: App {
                 OpenModelsButton(defaults: appDefaults).keyboardShortcut("m", modifiers: [.command, .shift])
                 Button("Show activity…") { store.showDiagnostics = true }
             }
+            CommandMenu("Writing") {
+                OpenWritingEditorButton(controller: writing)
+                Button("Improve last dictation") {
+                    if let text = dictation.recent.first { writing.openServiceText(text) }
+                }.disabled(dictation.recent.isEmpty)
+            }
             CommandGroup(replacing: .help) { GuideMenuItem(defaults: appDefaults) }
             CommandGroup(replacing: .appInfo) {
                 Button("About WhisperDrop 2") {
                     let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Development"
                     NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "WhisperDrop 2", .applicationVersion: version, .credits: NSAttributedString(string: "Local transcription for macOS.")])
                 }
+                Button("Check for Updates…") { updater.check() }
+                    .disabled(!updater.canCheck || updater.activity.blockingReason != nil)
             }
         }
         MenuBarExtra {
@@ -102,6 +152,11 @@ struct WhisperDropApp: App {
             .environmentObject(permissions)
             .environmentObject(dictation)
             .environmentObject(recorder)
+            .environmentObject(writingSettings)
+            .environmentObject(textModels)
+            .environmentObject(textEngine)
+            .environmentObject(writing)
+            .environmentObject(updater)
             .preferredColorScheme(.dark)
             .defaultAppStorage(appDefaults)
     }
@@ -111,6 +166,11 @@ struct WhisperDropApp: App {
         delegate.host = host
         delegate.dictation = dictation
         delegate.recorder = recorder
+        delegate.writing = writing
+        delegate.updater = updater
+        updater.start()
+        NSApp.servicesProvider = delegate
+        NSUpdateDynamicServices()
         host.residency = settings.residency
         host.keepReady = settings.keepReady
         dictation.refresh()
@@ -150,10 +210,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var host: ModelHost?
     weak var dictation: DictationController?
     weak var recorder: NoteRecorder?
+    weak var writing: WritingController?
+    weak var updater: AppUpdater?
+    @objc func improveText(_ pasteboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
+        guard let text = pasteboard.string(forType: .string), !text.isEmpty else {
+            error.pointee = "Select some text first."
+            return
+        }
+        writing?.openServiceText(text)
+    }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Sparkle may install a previously downloaded update when the app quits later.
+        // Keep the draft durable on every normal quit as well as on the explicit restart path.
+        do { try writing?.saveDraftForUpdate() }
+        catch {
+            let alert = NSAlert(); alert.messageText = "Could not save your writing draft"
+            alert.informativeText = error.localizedDescription + " Keep the app open and copy your text before quitting."
+            alert.addButton(withTitle: "Keep Open"); alert.runModal()
+            return .terminateCancel
+        }
         recorder?.finishForTermination()
         guard needsToWait else {
             host?.shutdown()
+            writing?.shutdown()
             store?.shutdownEngines()
             return .terminateNow
         }
@@ -164,6 +243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try? await Task.sleep(for: .milliseconds(100))
             }
             host?.shutdown()
+            writing?.shutdown()
             store?.shutdownEngines()
             sender.reply(toApplicationShouldTerminate: true)
         }
@@ -177,6 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         recorder?.finishForTermination()
         host?.shutdown()
+        writing?.shutdown()
         store?.shutdownEngines()
     }
     func applicationDidFinishLaunching(_ notification: Notification) {

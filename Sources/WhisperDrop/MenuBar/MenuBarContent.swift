@@ -9,6 +9,8 @@ struct MenuBarContent: View {
     @EnvironmentObject private var host: ModelHost
     @EnvironmentObject private var dictation: DictationController
     @EnvironmentObject private var recorder: NoteRecorder
+    @EnvironmentObject private var writing: WritingController
+    @EnvironmentObject private var writingSettings: WritingSettings
     @Environment(\.openWindow) private var openWindow
     @State private var panel: NSWindow?
     @State private var confirmDiscard = false
@@ -33,6 +35,15 @@ struct MenuBarContent: View {
             dictationRows
             separator
             if LiveNote.isActive(recorder.state) { noteCard } else { newNoteRows }
+            separator
+            Button { close(); writing.openEditor(); openMain() } label: {
+                MenuRowLabel(title: "Writing tools", subtitle: "Revise text locally", symbol: "text.cursor")
+            }.buttonStyle(MenuRowStyle())
+            Button {
+                close()
+                if let text = dictation.recent.first { writing.openServiceText(text) }
+            } label: { MenuRowLabel(title: "Improve last dictation", symbol: "text.bubble") }
+                .buttonStyle(MenuRowStyle()).disabled(dictation.recent.isEmpty)
             separator
             Button { close(); openMain() } label: { MenuRowLabel(title: "Open WhisperDrop 2", symbol: "macwindow") }
                 .buttonStyle(MenuRowStyle())

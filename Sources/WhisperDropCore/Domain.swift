@@ -155,6 +155,8 @@ public struct TranscriptionJob: Identifiable, Codable, Sendable {
     public var kind: JobKind?
     /// Recorded audio kept for notes, if the user chose to keep it.
     public var audioFile: URL?
+    /// Writing results stay separate from the timed original transcript.
+    public var textRevisions: [TextRevision]?
     public var resolvedKind: JobKind { kind ?? (isRemote ? .youtube : .file) }
     public init(source: URL, title: String? = nil, isRemote: Bool = false) {
         id = UUID(); self.source = source

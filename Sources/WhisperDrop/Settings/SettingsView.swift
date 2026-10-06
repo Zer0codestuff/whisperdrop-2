@@ -7,7 +7,7 @@ import WhisperDropCore
 /// Contract file. Settings window content. Reads AppStore, AppSettings, ModelHost, DictationController and Permissions from the environment.
 struct SettingsView: View {
     enum Tab: String, CaseIterable, Identifiable {
-        case general = "General", models = "Models", dictation = "Dictation", notes = "Notes", permissions = "Permissions"
+        case general = "General", models = "Models", dictation = "Dictation", notes = "Notes", writing = "Writing", permissions = "Permissions"
         var id: String { rawValue }
         var symbol: String {
             switch self {
@@ -15,6 +15,7 @@ struct SettingsView: View {
             case .models: "square.stack.3d.up"
             case .dictation: "waveform"
             case .notes: "note.text"
+            case .writing: "text.cursor"
             case .permissions: "lock.shield"
             }
         }
@@ -63,6 +64,7 @@ struct SettingsView: View {
                     case .dictation: DictationPane()
                     case .models: ModelsPane()
                     case .notes: NotesPane()
+                    case .writing: WritingSettingsPane()
                     case .permissions: PermissionsPane()
                     }
                 }.padding(.horizontal, 32).padding(.top, 36).padding(.bottom, 28).frame(maxWidth: .infinity, alignment: .leading)
@@ -131,6 +133,7 @@ private struct GeneralPane: View {
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var store: AppStore
     @EnvironmentObject private var recorder: NoteRecorder
+    @EnvironmentObject private var updater: AppUpdater
     @State private var loginEnabled = SMAppService.mainApp.status == .enabled
     @State private var loginStatus = SMAppService.mainApp.status
     @State private var loginError: String?
@@ -172,6 +175,19 @@ private struct GeneralPane: View {
         }
         SettingRow(title: "Boost quiet audio", detail: "Raises quiet speech in notes and files when background noise is low. Original audio is kept unchanged.") {
             Switch(isOn: $settings.automaticAudioBoost)
+        }
+        SettingRow(title: "App updates", detail: "Updates replace the app. Downloaded models and saved files stay on this Mac.") {
+            Button("Check for Updates…") { updater.check() }
+                .disabled(!updater.canCheck || updater.activity.blockingReason != nil).controlSize(.small)
+        }
+        SettingRow(title: "Check automatically", detail: "Check for new releases daily. Installation asks for your confirmation.") {
+            Switch(isOn: Binding(get: { updater.automaticallyChecks }, set: updater.setAutomaticChecks))
+                .disabled(!updater.canCheck)
+        }
+        Text(updater.activity.blockingReason ?? updater.status).font(.system(size: 11)).foregroundStyle(LivePalette.secondary)
+            .fixedSize(horizontal: false, vertical: true).padding(.bottom, 10)
+        if updater.deferred {
+            Button("Retry update") { updater.retryDeferredInstall() }.controlSize(.small).padding(.bottom, 10)
         }
         Rectangle().fill(LivePalette.line).frame(height: 1)
     }
@@ -284,7 +300,8 @@ private struct ModelsPane: View {
     @EnvironmentObject private var recorder: NoteRecorder
     @State private var showTasks = false
     var body: some View {
-        PaneHeader(title: "Models", subtitle: "The model does the listening. Choose it here; dictation, notes and files all use it.")
+        PaneHeader(title: "Models", subtitle: "Choose local models for transcription and text editing.")
+        Text("Transcription").font(.system(size: 17, weight: .medium)).padding(.bottom, 12)
         statusCard.padding(.bottom, 14)
         ForEach(Array(TranscriptionModel.catalog.enumerated()), id: \.element.id) { index, model in
             ModelRow(model: model, divider: index > 0)
@@ -311,6 +328,7 @@ private struct ModelsPane: View {
                 host.keepReady = settings.keepReady
                 if settings.keepReady { LiveModels.prewarm(settings: settings, store: store, host: host) }
             }
+        TextModelsPane()
     }
 
     private var statusCard: some View {

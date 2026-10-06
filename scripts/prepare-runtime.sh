@@ -61,4 +61,5 @@ for tool in .runtime/bin/*; do
   fi
 done
 scripts/prepare-mlx.sh
+scripts/prepare-text-runtime.sh
 printf 'Runtime ready.\n'

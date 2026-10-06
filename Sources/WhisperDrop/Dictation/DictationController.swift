@@ -17,6 +17,10 @@ final class DictationController: ObservableObject {
     @Published private(set) var recent: [String] = []
     /// True when the model's files are installed.
     var modelInstalled: (TranscriptionModel) -> Bool = { _ in true }
+    /// Lets the text-action panel close before a new dictation captures its destination.
+    var onBegin: (() -> Void)?
+    /// Completed words, with a replacement target only when the inserted field was read back and verified.
+    var onComplete: ((String, TextSelectionSnapshot?) -> Void)?
     /// True when dictation is enabled but the event tap was refused for lack of Input Monitoring.
     var requiredPermissionMissing: Bool { monitor.requiredPermissionMissing }
 
@@ -41,6 +45,8 @@ final class DictationController: ObservableObject {
     private var live = LiveText()
     private var writer: LiveTextWriter?
     private var writerMode: LiveTextWriter.Mode?
+    private let insertionSelection = TextSelectionService()
+    private var insertionTarget: TextInsertionTarget?
     private var cue: NSSound?
 
     private static let maxListenNanos: UInt64 = 600_000_000_000
@@ -140,6 +146,7 @@ final class DictationController: ObservableObject {
         gesture.reset()
         stopTimers()
         dropWriter()
+        insertionTarget = nil
         mic.stop()
         _ = buffer.end()
         level = 0
@@ -240,6 +247,8 @@ final class DictationController: ObservableObject {
             fail("Download \(model.name) in Settings, Models first.")
             return
         }
+        onBegin?()
+        insertionTarget = settings.autoPaste ? insertionSelection.captureInsertionTarget() : nil
         failTask?.cancel()
         generation += 1
         let token = generation
@@ -363,6 +372,8 @@ final class DictationController: ObservableObject {
         let restore = settings.restoreClipboard
         let live = self.live
         let writer = self.writer
+        let insertionTarget = self.insertionTarget
+        self.insertionTarget = nil
         // Typed words cannot be corrected without deleting them again, so they stay and only the rest is decoded.
         // Everywhere else the whole clip is decoded again, which is more accurate, and the field is corrected in place.
         let keepSettled = writerMode == .typing && !live.settled.isEmpty
@@ -391,18 +402,22 @@ final class DictationController: ObservableObject {
                 }
                 switch await writer?.finish(text) {
                 case .written?:
+                    let snapshot = await self.insertionSelection.snapshotInsertedText(text, target: insertionTarget)
                     guard token == self.generation else { return }
                     self.remember(text)
                     self.play("Pop", volume: 0.18)
                     self.publish(.idle)
+                    self.onComplete?(snapshot?.text ?? text, snapshot)
                 case .partial?:
                     guard token == self.generation else { return }
                     self.remember(text)
                     self.copyLast()
                     self.fail("The text field changed. The full text is copied")
+                    self.onComplete?(text, nil)
                 case .untouched?, nil:
                     let lead = paste ? await Task.detached(priority: .userInitiated) { LiveTextWriter.leadingSpaceAtCaret() }.value : ""
                     let pasted = await TextInserter.insert(lead + text, paste: paste, restoreClipboard: restore)
+                    let snapshot = pasted ? await self.insertionSelection.snapshotInsertedText(text, target: insertionTarget) : nil
                     guard token == self.generation else { return }
                     self.remember(text)
                     self.play("Pop", volume: 0.18)
@@ -411,6 +426,7 @@ final class DictationController: ObservableObject {
                     } else {
                         self.fail("Copied to clipboard")
                     }
+                    self.onComplete?(snapshot?.text ?? text, snapshot)
                 }
             } catch {
                 await writer?.cancel()
