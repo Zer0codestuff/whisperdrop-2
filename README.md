@@ -2,9 +2,9 @@
 
 Turn recordings, videos and meetings into text, right on your Mac. Record a lecture, transcribe a YouTube playlist, or dictate directly into another app.
 
-![WhisperDrop 2 showing a lecture transcript, saved notes and transcription controls](docs/screenshots/whisperdrop-notes.jpg)
+![WhisperDrop 2 transcribing a short lecture recording in about a second](docs/screenshots/whisperdrop-transcribe.gif)
 
-*The app with sample lecture content.*
+*A 23-second recording transcribed with Parakeet v3. Sample content with a synthetic voice.*
 
 [Download the latest version](https://github.com/Zer0codestuff/whisperdrop-2/releases/latest) · Apple Silicon · macOS 14 or later
 
@@ -23,6 +23,10 @@ Turn recordings, videos and meetings into text, right on your Mac. Record a lect
 - Queue several recordings, cancel processing, retry failures, and return to saved transcripts later.
 - Choose one model for everything in **Settings > Models**. Parakeet v3 is the default: it covers 25 European languages and is fast enough for dictation to write words into the text field while you speak. Whisper models remain available as legacy models for other languages and vocabulary hints; when your language needs one, an installed Whisper model is used automatically. Advanced settings can give dictation, notes or files their own model.
 - Process speech locally. After downloading a model, you can transcribe local files, record notes and dictate offline.
+
+![WhisperDrop 2 showing a lecture transcript, saved notes and transcription controls](docs/screenshots/whisperdrop-notes.jpg)
+
+*The app with sample lecture content.*
 
 ## Use it in your browser
 
