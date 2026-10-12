@@ -69,13 +69,14 @@ struct WhisperDropApp: App {
             return !LiveNote.isActive(recorder.state) && dictation.state == .idle
         }
         writing.observeCapture(recorder: recorder, dictation: dictation)
+        Task { await store.compressSavedAudio() }
         let updater = AppUpdater()
         updater.currentActivity = { [weak store, weak recorder, weak dictation, weak writing, weak textModels] in
             var activity = UpdateActivity()
             activity.recording = recorder.map { LiveNote.isActive($0.state) } ?? false
             activity.dictating = dictation.map { $0.state != .idle } ?? false
             activity.transcribing = store?.busy ?? false; activity.importing = store?.importing ?? false
-            activity.movingFiles = store?.movingSavedFiles ?? false
+            activity.movingFiles = store?.movingSavedFiles == true || store?.compressingAudio == true
             activity.downloadingModel = store?.downloadingModel != nil || textModels?.downloadingID != nil
             activity.editing = writing?.hasActiveWritingWork == true
             activity.replacingText = writing?.replacing ?? false

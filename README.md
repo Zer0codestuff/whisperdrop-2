@@ -53,7 +53,7 @@ Starting with 2.6.0, use **WhisperDrop 2 > Check for Updates…** or **Settings 
 
 ## Notes and dictation
 
-Notes use the app language. To record one note in another language, choose it in **Note language** beside **New note**; the next note uses it once. Use **Keep audio** if you also want to save the recording. You can find kept audio later using the note's audio button.
+Notes use the app language. To record one note in another language, choose it in **Note language** beside **New note**; the next note uses it once. Use **Keep audio** if you also want to save the recording. It is saved as a compact M4A file named after the note, about 22 MB per hour. You can find kept audio later using the note's audio button.
 
 To rename a note, click its title, type the new name and press Return. This works while the note is recording and after it is saved. You can also right-click a saved note in the library and choose **Rename…**.
 
@@ -133,7 +133,7 @@ Building requires Xcode 26.4 or later, its command-line tools, CMake and a C/C++
 git clone https://github.com/Zer0codestuff/whisperdrop-2.git
 cd whisperdrop-2
 scripts/prepare-runtime.sh
-swift test
+swift test --build-system native
 scripts/build-app.sh
 open 'dist/WhisperDrop 2.app'
 ```
@@ -148,8 +148,10 @@ scripts/package-dmg.sh
 
 Saved audio and transcripts default to `~/Documents/WhisperDrop/`:
 
-- `Audio/`: original CAF recordings, one subfolder per note when Keep audio is on.
-- `Transcripts/`: TXT, SRT and VTT transcripts, plus the note's recovery JSON.
+- `Audio/`: one folder per note, named after the note, with its recording as an M4A file when Keep audio is on. A note that recorded both sources has one file for You and one for Others.
+- `Transcripts/`: TXT, SRT and VTT transcripts, plus the note's recovery JSON, in a folder with the same name.
+
+Renaming a note renames its folders and recording. Two notes with the same name get a number after the second one. Recordings saved as CAF by earlier versions are converted to M4A on launch, and the CAF originals go to the Trash.
 
 Open Settings from the main window, then General, Saved files, Choose to select another folder. Existing saved files move with the library. The app verifies copies before removing originals and updates file references together with the destination. Earlier recordings in Application Support migrate automatically.
 

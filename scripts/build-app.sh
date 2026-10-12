@@ -6,7 +6,7 @@ for tool in whisper-cli whisper-server whisper-vad-speech-segments llama-server 
 done
 [[ -f .runtime/models/ggml-silero-v6.2.0.bin ]] || { echo 'Run scripts/prepare-runtime.sh first.' >&2; exit 1; }
 [[ -f .runtime/bin/mlx.metallib && -f .runtime/bin/Resources/mlx.metallib ]] || { echo 'Run scripts/prepare-mlx.sh first.' >&2; exit 1; }
-swift build -c release --arch arm64
+swift build --build-system native -c release --arch arm64
 app='dist/WhisperDrop 2.app'
 # A fresh bundle: binaries copied over older ones in place keep a stale cached signature.
 rm -rf "$app"
@@ -16,7 +16,7 @@ sparkle='.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64
 # ditto retains versioned framework symlinks and helper executable permissions.
 ditto "$sparkle" "$app/Contents/Frameworks/Sparkle.framework"
 cp .build/checkouts/Sparkle/LICENSE "$app/Contents/Resources/Runtime/licenses/Sparkle.txt"
-binary_dir="$(swift build -c release --arch arm64 --show-bin-path)"
+binary_dir="$(swift build --build-system native -c release --arch arm64 --show-bin-path)"
 cp "$binary_dir/WhisperDrop" "$app/Contents/MacOS/WhisperDrop"
 cp -R .runtime/bin/. "$app/Contents/Resources/Runtime/bin/"
 cp "$binary_dir/parakeet-server" "$app/Contents/Resources/Runtime/bin/parakeet-server"

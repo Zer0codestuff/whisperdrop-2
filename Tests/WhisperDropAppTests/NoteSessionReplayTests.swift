@@ -34,7 +34,11 @@ final class NoteSessionReplayTests: XCTestCase {
         settings.noteLiveText = env["WHISPERDROP_SESSION_LIVE_PREVIEW"] != "0"
         let source = try ReplayCapture(file: URL(fileURLWithPath: input), speed: pace)
         var saved: TranscriptionJob?
+        // The recorded PCM is copied aside before the real conversion, so capture can still be compared sample by sample.
+        let recorded = URL(fileURLWithPath: report + ".recorded.caf")
+        try? FileManager.default.removeItem(at: recorded)
         let factory = NoteCaptureFactory(makeMicrophone: { source }, makeSystemTap: { source }, makeWriter: { try AudioFileWriter(url: $0) },
+                                         compressAudio: { try FileManager.default.copyItem(at: $0, to: recorded); try AudioCompressor.replace($0) },
                                          requestMicrophoneAccess: { true }, systemAudioSupported: { true })
         let recorder = NoteRecorder(settings: settings, host: host, folder: folder, onFinish: { saved = $0 }, captures: factory, defaults: defaults,
             folderProvider: { (audio: folder.appendingPathComponent("Audio"), transcripts: folder.appendingPathComponent("Transcripts")) })
@@ -89,9 +93,15 @@ final class NoteSessionReplayTests: XCTestCase {
         XCTAssertFalse(job.segments.isEmpty)
         XCTAssertEqual(job.duration ?? 0, source.duration / max(0.01, pace), accuracy: 1)
         XCTAssertEqual(job.source.deletingLastPathComponent().lastPathComponent, "Transcripts")
-        let audio = folder.appendingPathComponent("Audio/\(job.source.lastPathComponent)/\(NoteCopy.microphoneFile)")
+        var audioBytes = [0, 0]
+        let noteAudio = folder.appendingPathComponent("Audio/\(job.source.lastPathComponent)", isDirectory: true)
+        let audio = noteAudio.appendingPathComponent(NoteCopy.microphoneFile)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: audio.path))
         if settings.keepNoteAudio {
-            let file = try AVAudioFile(forReading: audio)
+            let compressed = try AVAudioFile(forReading: noteAudio.appendingPathComponent("you.m4a"))
+            XCTAssertEqual(compressed.length, AVAudioFramePosition(source.sampleCount))
+            XCTAssertEqual(compressed.fileFormat.settings[AVFormatIDKey] as? UInt32, kAudioFormatMPEG4AAC)
+            let file = try AVAudioFile(forReading: recorded)
             XCTAssertEqual(file.length, AVAudioFramePosition(source.sampleCount))
             XCTAssertNotNil(job.audioFile)
             let original = try AVAudioFile(forReading: URL(fileURLWithPath: input))
@@ -103,8 +113,9 @@ final class NoteSessionReplayTests: XCTestCase {
             // CAF PCM16 rounds into 32767; one quantization step is allowed, not an amplified recording.
             XCTAssertEqual(actualSamples.count, expectedSamples.count)
             XCTAssertLessThanOrEqual(zip(actualSamples, expectedSamples).map { abs($0 - $1) }.max() ?? 0, 1.0 / 32768)
+            audioBytes = [try compressed.url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0, try recorded.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0]
         } else {
-            XCTAssertFalse(FileManager.default.fileExists(atPath: audio.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: noteAudio.path))
             XCTAssertNil(job.audioFile)
         }
         let encoded = try JSONEncoder().encode(job)
@@ -117,6 +128,8 @@ final class NoteSessionReplayTests: XCTestCase {
         data["segment_events"] = segmentEvents
         data["pause_events"] = pauseEvents
         data["boost_seen"] = boostedSeen
+        data["saved_audio_bytes"] = audioBytes[0]
+        data["recorded_pcm_bytes"] = audioBytes[1]
         data["max_preprocessing_seconds"] = maxPreprocessing
         data["source_end_wall"] = sourceEndedAt.map { $0.timeIntervalSince(started) } as Any
         try JSONSerialization.data(withJSONObject: data, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: report))

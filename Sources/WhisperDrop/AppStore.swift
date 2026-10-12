@@ -20,6 +20,7 @@ final class AppStore: ObservableObject {
     @Published var showDiagnostics = false
     @Published private(set) var savedFolder: URL
     @Published private(set) var movingSavedFiles = false
+    @Published private(set) var compressingAudio = false
     private var work: Task<Void, Never>?
     private var importWork: Task<Void, Never>?
     private var modelWork: Task<Void, Never>?
@@ -29,6 +30,8 @@ final class AppStore: ObservableObject {
     var canMoveSavedFiles: () -> Bool = { true }
     var audioBoostEnabled: () -> Bool = { true }
     var spokenLanguage: () -> String = { "auto" }
+    /// What happens to a CAF from an earlier version once its M4A is verified.
+    var discardOriginal: @Sendable (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }
     /// The file model chosen in Settings, Models.
     var fileModel: () -> TranscriptionModel = { TranscriptionModel.catalog[0] }
     let modelsFolder: URL
@@ -54,12 +57,15 @@ final class AppStore: ObservableObject {
             if FileManager.default.fileExists(atPath: historyURL.path) {
                 libraryReadable = false
                 let data = try Data(contentsOf: historyURL)
+                var interrupted: [SavedLibrary.Rename] = []
                 if let snapshot = try? JSONDecoder().decode(LibrarySnapshot.self, from: data) {
                     savedFolder = snapshot.savedFolder
                     jobs = snapshot.jobs
                     pendingPreviousFolder = snapshot.pendingPreviousFolder
+                    interrupted = snapshot.pendingRenames ?? []
                 } else { jobs = try JSONDecoder().decode([TranscriptionJob].self, from: data) }
                 libraryReadable = true
+                try SavedLibrary.apply(interrupted)
                 for i in jobs.indices where jobs[i].status.isActive { jobs[i].status = .queued }
             }
             let migration = try SavedLibrary.migrate(jobs: jobs, from: pendingPreviousFolder, legacyRoot: self.root, to: savedFolder)
@@ -72,6 +78,12 @@ final class AppStore: ObservableObject {
                 if !FileManager.default.fileExists(atPath: job.source.appendingPathComponent("transcript.txt").path) {
                     try SavedLibrary.archive(job, in: job.source, preserveExistingRecovery: true)
                 }
+            }
+            // Earlier versions named a note's folders with an identifier.
+            for job in jobs where job.status == .completed && job.resolvedKind == .note && UUID(uuidString: job.source.lastPathComponent) != nil {
+                let plan = SavedLibrary.naming(job, as: job.title)
+                do { try commit(jobs.map { $0.id == job.id ? plan.job : $0 }, renames: plan.renames) }
+                catch { self.error = "Could not name the folders of \(job.title): \(error.localizedDescription)" }
             }
         } catch { self.error = "Could not load the library: \(error.localizedDescription)" }
         selection = jobs.first?.id
@@ -91,8 +103,36 @@ final class AppStore: ObservableObject {
         do { try JSONEncoder().encode(LibrarySnapshot(savedFolder: savedFolder, jobs: jobs, pendingPreviousFolder: pendingPreviousFolder)).write(to: historyURL, options: .atomic) }
         catch { self.error = "Could not save the library: \(error.localizedDescription)" }
     }
+    /// Commits job references together with the renames they rely on, then renames.
+    private func commit(_ updated: [TranscriptionJob], renames: [SavedLibrary.Rename]) throws {
+        guard libraryReadable else { throw AppFailure("The library could not be read.") }
+        try JSONEncoder().encode(LibrarySnapshot(savedFolder: savedFolder, jobs: updated, pendingPreviousFolder: pendingPreviousFolder,
+                                                 pendingRenames: renames.isEmpty ? nil : renames)).write(to: historyURL, options: .atomic)
+        do { try SavedLibrary.apply(renames) }
+        catch {
+            SavedLibrary.revert(renames)
+            save()
+            throw error
+        }
+        jobs = updated
+        if !renames.isEmpty { save() }
+    }
+    /// Converts recordings that earlier versions saved as CAF, and any a quitting app left unconverted.
+    func compressSavedAudio() async {
+        guard libraryReadable, !movingSavedFiles, !compressingAudio else { return }
+        let folders = jobs.filter { $0.status == .completed && $0.resolvedKind == .note }.compactMap(\.audioFile)
+        let recordings = folders.flatMap { SavedLibrary.recordings(in: $0).map(\.file) }.filter { $0.pathExtension.lowercased() == "caf" }
+        guard !recordings.isEmpty else { return }
+        compressingAudio = true
+        defer { compressingAudio = false }
+        let discard = discardOriginal
+        let failed = await Task.detached(priority: .utility) {
+            recordings.filter { (try? AudioCompressor.replace($0, discard: discard)) == nil }
+        }.value
+        if !failed.isEmpty { log("\nCould not compress \(failed.map(\.path).joined(separator: ", ")). The recordings were kept as they are.\n") }
+    }
     func chooseSavedFolder() {
-        guard libraryReadable, pendingPreviousFolder == nil, !busy, !importing, !movingSavedFiles, canMoveSavedFiles() else { return }
+        guard libraryReadable, pendingPreviousFolder == nil, !busy, !importing, !movingSavedFiles, !compressingAudio, canMoveSavedFiles() else { return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -107,7 +147,7 @@ final class AppStore: ObservableObject {
         }
     }
     func changeSavedFolder(to folder: URL) async {
-        guard libraryReadable, pendingPreviousFolder == nil, !busy, !importing, !movingSavedFiles, canMoveSavedFiles() else { return }
+        guard libraryReadable, pendingPreviousFolder == nil, !busy, !importing, !movingSavedFiles, !compressingAudio, canMoveSavedFiles() else { return }
         movingSavedFiles = true
         defer { movingSavedFiles = false }
         let old = savedFolder, currentJobs = jobs, legacy = root
@@ -156,7 +196,7 @@ final class AppStore: ObservableObject {
         if unsupported > 0 { error = "\(unsupported) item(s) could not be added. Choose readable audio or video files." }
         save()
     }
-    /// Inserts a finished note at the top of the library and selects it.
+    /// Inserts a finished note at the top of the library, names its folders after its title and selects it.
     func addNote(_ job: TranscriptionJob) {
         var job = job
         do { try SavedLibrary.archive(job, in: job.source) }
@@ -165,9 +205,13 @@ final class AppStore: ObservableObject {
             job.error = [job.error, message].compactMap { $0 }.joined(separator: "\n")
             self.error = message
         }
-        jobs.insert(job, at: 0)
+        let plan = SavedLibrary.naming(job, as: job.title)
+        do { try commit([plan.job] + jobs, renames: plan.renames) }
+        catch {
+            jobs.insert(job, at: 0)
+            save()
+        }
         selection = job.id
-        save()
     }
     func transcriptText(_ job: TranscriptionJob) -> String {
         job.resolvedKind == .note ? TranscriptOutput.labeledText(job.segments, eachSentence: job.sentenceParagraphs == true) : job.transcript
@@ -222,9 +266,9 @@ final class AppStore: ObservableObject {
     }
     func retry(_ id: UUID) { guard !movingSavedFiles else { return }; update(id) { $0.status = .queued; $0.error = nil }; save() }
     func canRenameNote(_ job: TranscriptionJob) -> Bool {
-        libraryReadable && !movingSavedFiles && job.resolvedKind == .note && job.status == .completed
+        libraryReadable && !movingSavedFiles && !compressingAudio && job.resolvedKind == .note && job.status == .completed
     }
-    /// Commit the title before publishing it. Recording and transcript paths remain tied to the note's ID.
+    /// Commit the title before publishing it. The note's folders and recordings take the new name.
     func renameNote(_ id: UUID, to title: String) throws {
         guard let index = jobs.firstIndex(where: { $0.id == id }), canRenameNote(jobs[index]) else {
             throw AppFailure("This note cannot be renamed right now.")
@@ -232,11 +276,11 @@ final class AppStore: ObservableObject {
         let name = title.components(separatedBy: .newlines).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { throw AppFailure("Enter a name for the note.") }
         guard name != jobs[index].title else { return }
+        let plan = SavedLibrary.naming(jobs[index], as: name)
         var renamed = jobs
+        renamed[index] = plan.job
         renamed[index].title = name
-        try JSONEncoder().encode(LibrarySnapshot(savedFolder: savedFolder, jobs: renamed, pendingPreviousFolder: pendingPreviousFolder))
-            .write(to: historyURL, options: .atomic)
-        jobs = renamed
+        try commit(renamed, renames: plan.renames)
     }
     func remove(_ id: UUID) {
         guard !movingSavedFiles, let job = jobs.first(where: { $0.id == id }), !job.status.isActive else { return }
@@ -470,7 +514,7 @@ final class AppStore: ObservableObject {
         let text = ext == "txt" ? transcriptText(job) : TranscriptOutput.subtitles(job.segments, vtt: ext == "vtt")
         let panel = NSSavePanel()
         panel.directoryURL = outputFolder
-        panel.nameFieldStringValue = job.title.replacingOccurrences(of: "/", with: "-") + "." + ext
+        panel.nameFieldStringValue = SavedLibrary.fileName(for: job.title) + "." + ext
         panel.allowedContentTypes = ext == "txt" ? [.plainText] : [UTType(filenameExtension: ext, conformingTo: .text) ?? .plainText]
         panel.begin { [weak self] result in
             guard result == .OK, let url = panel.url else { return }

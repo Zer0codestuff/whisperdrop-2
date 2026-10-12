@@ -1,3 +1,4 @@
+import AVFoundation
 import XCTest
 import WhisperDropCore
 @testable import WhisperDrop
@@ -72,7 +73,7 @@ final class SavedLibraryTests: XCTestCase {
         XCTAssertNil(store.error)
         XCTAssertEqual(store.jobs[0].audioFile?.path, destination.appendingPathComponent("Audio/note").path)
         XCTAssertFalse(FileManager.default.fileExists(atPath: note.path))
-        XCTAssertEqual(try String(contentsOf: destination.appendingPathComponent("Audio/note/you.caf")), "untouched audio")
+        XCTAssertEqual(try String(contentsOf: destination.appendingPathComponent("Audio/note/note.caf")), "untouched audio")
         let reopened = AppStore(root: root)
         XCTAssertNil(reopened.error)
         XCTAssertEqual(reopened.savedFolder.path, destination.path)
@@ -93,48 +94,51 @@ final class SavedLibraryTests: XCTestCase {
         XCTAssertNil(store.error)
     }
 
-    func testRenamePersistsAndKeepsAudioAndTranscriptFiles() throws {
+    func testRenameMovesFoldersAndRecordingToTheNewNameAndPersists() throws {
         let root = folder.appendingPathComponent("AppData")
         let store = AppStore(root: root)
-        let audio = store.audioFolder.appendingPathComponent("note/you.caf")
-        try write("original recording", at: audio)
-        var job = TranscriptionJob(source: store.outputFolder.appendingPathComponent("note"), title: "Old title")
-        job.kind = .note; job.status = .completed; job.audioFile = audio.deletingLastPathComponent()
+        try write("original recording", at: store.audioFolder.appendingPathComponent("note/you.m4a"))
+        try write("mine", at: store.audioFolder.appendingPathComponent("note/my-cut.mp3"))
+        var job = TranscriptionJob(source: store.outputFolder.appendingPathComponent("note", isDirectory: true), title: "Old: title")
+        job.kind = .note; job.status = .completed; job.audioFile = store.audioFolder.appendingPathComponent("note", isDirectory: true)
         job.segments = [TranscriptSegment(id: 0, start: 0, end: 1, text: "Saved words.")]
         job.transcript = "Saved words."
         store.addNote(job)
-        store.selection = job.id
-        let files = try FileManager.default.contentsOfDirectory(at: job.source, includingPropertiesForKeys: nil) + [audio]
-        let hashes = try files.map { try sha256File($0) }
+        XCTAssertNil(store.error)
+        XCTAssertEqual(try String(contentsOf: store.audioFolder.appendingPathComponent("Old. title/Old. title.m4a")), "original recording")
+        XCTAssertEqual(store.current?.source.path, store.outputFolder.appendingPathComponent("Old. title").path)
 
         try store.renameNote(job.id, to: "  Lesson 1  ")
         XCTAssertEqual(store.current?.title, "Lesson 1")
         XCTAssertEqual(store.current?.id, job.id)
-        XCTAssertEqual(store.current?.source, job.source)
-        XCTAssertEqual(store.current?.audioFile, job.audioFile)
+        XCTAssertEqual(store.current?.audioFile?.path, store.audioFolder.appendingPathComponent("Lesson 1").path)
         XCTAssertEqual(store.current?.segments.map(\.text), job.segments.map(\.text))
-        XCTAssertEqual(store.current?.segments.map(\.start), job.segments.map(\.start))
-        XCTAssertEqual(store.current?.segments.map(\.end), job.segments.map(\.end))
-        XCTAssertEqual(try files.map { try sha256File($0) }, hashes)
+        XCTAssertEqual(try String(contentsOf: store.audioFolder.appendingPathComponent("Lesson 1/Lesson 1.m4a")), "original recording")
+        XCTAssertEqual(try String(contentsOf: store.audioFolder.appendingPathComponent("Lesson 1/my-cut.mp3")), "mine")
+        XCTAssertEqual(try String(contentsOf: store.outputFolder.appendingPathComponent("Lesson 1/transcript.txt")), "Saved words.")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.audioFolder.path), ["Lesson 1"])
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.outputFolder.path), ["Lesson 1"])
+        let saved = try JSONDecoder().decode(LibrarySnapshot.self, from: Data(contentsOf: root.appendingPathComponent("history.json")))
+        XCTAssertNil(saved.pendingRenames)
         let reopened = AppStore(root: root)
         XCTAssertNil(reopened.error)
         XCTAssertEqual(reopened.jobs.first?.title, "Lesson 1")
-        XCTAssertEqual(reopened.jobs.first?.audioFile, job.audioFile)
+        XCTAssertEqual(reopened.jobs.first?.audioFile, store.current?.audioFile)
         XCTAssertEqual(reopened.jobs.first?.transcript, job.transcript)
     }
 
     func testRenameWithoutAudioAndDuplicateTitlesKeepSeparateNotes() throws {
         let store = AppStore(root: folder.appendingPathComponent("AppData"))
-        var first = TranscriptionJob(source: store.outputFolder.appendingPathComponent("first"), title: "First")
+        var first = TranscriptionJob(source: store.outputFolder.appendingPathComponent("first", isDirectory: true), title: "First")
         first.kind = .note; first.status = .completed
         var second = first
-        second.id = UUID(); second.source = store.outputFolder.appendingPathComponent("second"); second.title = "Lesson 1"
+        second.id = UUID(); second.source = store.outputFolder.appendingPathComponent("second", isDirectory: true); second.title = "Lesson 1"
         store.addNote(first); store.addNote(second)
         try store.renameNote(first.id, to: "Lesson 1")
         XCTAssertEqual(store.jobs.map(\.title), ["Lesson 1", "Lesson 1"])
         XCTAssertEqual(Set(store.jobs.map(\.id)).count, 2)
-        XCTAssertEqual(store.jobs.first?.source, second.source)
-        XCTAssertEqual(store.jobs.last?.source, first.source)
+        XCTAssertEqual(store.jobs.map(\.source.lastPathComponent), ["Lesson 1", "Lesson 1 2"])
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.outputFolder.path).sorted(), ["Lesson 1", "Lesson 1 2"])
         XCTAssertNil(store.jobs.last?.audioFile)
         XCTAssertThrowsError(try store.renameNote(first.id, to: " \n\t "))
         XCTAssertEqual(store.jobs.last?.title, "Lesson 1")
@@ -143,6 +147,65 @@ final class SavedLibraryTests: XCTestCase {
         store.jobs.append(file)
         XCTAssertThrowsError(try store.renameNote(file.id, to: "A file"))
         XCTAssertEqual(store.jobs.last?.title, file.title)
+    }
+
+    func testLaunchNamesIdentifierFoldersAndFinishesAnInterruptedRename() throws {
+        let root = folder.appendingPathComponent("AppData")
+        let saved = root.appendingPathComponent("Saved")
+        let id = UUID().uuidString
+        try write("mic", at: saved.appendingPathComponent("Audio/\(id)/you.caf"))
+        try write("call", at: saved.appendingPathComponent("Audio/\(id)/others.caf"))
+        try write("[]", at: saved.appendingPathComponent("Transcripts/\(id)/transcript.json"))
+        var note = TranscriptionJob(source: saved.appendingPathComponent("Transcripts/\(id)", isDirectory: true), title: "DS, 6 Oct 2026, 17:05")
+        note.kind = .note; note.status = .completed; note.audioFile = saved.appendingPathComponent("Audio/\(id)", isDirectory: true)
+        // A rename that was committed but never reached the disk.
+        try write("interrupted", at: saved.appendingPathComponent("Audio/Before/Before.m4a"))
+        var moved = TranscriptionJob(source: saved.appendingPathComponent("Transcripts/After", isDirectory: true), title: "After")
+        moved.kind = .note; moved.status = .completed; moved.audioFile = saved.appendingPathComponent("Audio/After", isDirectory: true)
+        let pending = SavedLibrary.Rename(from: saved.appendingPathComponent("Audio/Before/Before.m4a"), to: saved.appendingPathComponent("Audio/Before/After.m4a"))
+        let folderRename = SavedLibrary.Rename(from: saved.appendingPathComponent("Audio/Before"), to: saved.appendingPathComponent("Audio/After"))
+        try JSONEncoder().encode(LibrarySnapshot(savedFolder: saved, jobs: [note, moved], pendingRenames: [pending, folderRename]))
+            .write(to: root.appendingPathComponent("history.json"))
+
+        let store = AppStore(root: root)
+        XCTAssertNil(store.error)
+        let name = "DS, 6 Oct 2026, 17.05"
+        XCTAssertEqual(store.jobs[0].source.path, saved.appendingPathComponent("Transcripts/\(name)").path)
+        XCTAssertEqual(try String(contentsOf: saved.appendingPathComponent("Audio/\(name)/\(name) - You.caf")), "mic")
+        XCTAssertEqual(try String(contentsOf: saved.appendingPathComponent("Audio/\(name)/\(name) - Others.caf")), "call")
+        XCTAssertEqual(try String(contentsOf: saved.appendingPathComponent("Audio/After/After.m4a")), "interrupted")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: saved.appendingPathComponent("Audio").path).sorted(), ["After", name])
+        let committed = try JSONDecoder().decode(LibrarySnapshot.self, from: Data(contentsOf: root.appendingPathComponent("history.json")))
+        XCTAssertNil(committed.pendingRenames)
+        XCTAssertEqual(committed.jobs[0].audioFile, store.jobs[0].audioFile)
+        XCTAssertEqual(NoteAudio.savedFiles(in: try XCTUnwrap(store.jobs[0].audioFile)).map(\.lastPathComponent), ["\(name) - Others.caf", "\(name) - You.caf"])
+    }
+
+    func testOlderRecordingsBecomeM4AAndUnreadableOnesAreKept() async throws {
+        let store = AppStore(root: folder.appendingPathComponent("AppData"))
+        let audio = store.audioFolder.appendingPathComponent("Lesson", isDirectory: true)
+        try FileManager.default.createDirectory(at: audio, withIntermediateDirectories: true)
+        let writer = try AudioFileWriter(url: audio.appendingPathComponent("you.caf"))
+        let samples = (0..<160_000).map { Float(sin(Double($0) * 2 * .pi * 220 / 16_000)) * 0.3 }
+        writer.append(samples)
+        writer.close()
+        try write("not audio", at: audio.appendingPathComponent("others.caf"))
+        let original = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: audio.appendingPathComponent("you.caf").path)[.size] as? Int)
+        var job = TranscriptionJob(source: store.outputFolder.appendingPathComponent("Lesson", isDirectory: true), title: "Lesson")
+        job.kind = .note; job.status = .completed; job.audioFile = audio
+        store.addNote(job)
+        store.discardOriginal = { try FileManager.default.removeItem(at: $0) }
+
+        await store.compressSavedAudio()
+        XCTAssertFalse(store.compressingAudio)
+        let compressed = audio.appendingPathComponent("Lesson - You.m4a")
+        let file = try AVAudioFile(forReading: compressed)
+        XCTAssertEqual(file.length, AVAudioFramePosition(samples.count))
+        XCTAssertEqual(file.fileFormat.settings[AVFormatIDKey] as? UInt32, kAudioFormatMPEG4AAC)
+        let size = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: compressed.path)[.size] as? Int)
+        XCTAssertLessThan(size, original / 4)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: audio.path).sorted(), ["Lesson - Others.caf", "Lesson - You.m4a"])
+        XCTAssertEqual(try String(contentsOf: audio.appendingPathComponent("Lesson - Others.caf")), "not audio")
     }
 
     func testRenameFailureKeepsThePreviousTitle() throws {
@@ -156,6 +219,7 @@ final class SavedLibraryTests: XCTestCase {
         try FileManager.default.createDirectory(at: history, withIntermediateDirectories: true)
         XCTAssertThrowsError(try store.renameNote(job.id, to: "Lesson 1"))
         XCTAssertEqual(store.jobs.first?.title, "Original")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.outputFolder.path), ["Original"])
     }
 
     func testRestartFinishesAnInterruptedMoveAndKeepsUnrelatedFiles() throws {

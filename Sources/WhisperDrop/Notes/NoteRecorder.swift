@@ -713,6 +713,11 @@ final class NoteRecorder: ObservableObject {
         writePartialTranscript()
         let keepAudio = sessionKeepAudio || terminationHandoff
         if !keepAudio { deleteCapturedAudio() }
+        // A quitting app leaves the CAF. The next launch converts it.
+        else if !terminationHandoff {
+            await compressCapturedAudio()
+            guard token == generation, !discardRequested else { return }
+        }
         let folder = noteFolder ?? self.folder
         let job = NoteJobs.make(
             folder: folder,
@@ -751,6 +756,16 @@ final class NoteRecorder: ObservableObject {
             captureWarning = "The transcript could not be saved to your selected folder. Check access and disk space."
             publishWarning()
         }
+    }
+
+    /// A recording that cannot be converted stays as it was recorded.
+    private func compressCapturedAudio() async {
+        guard let noteFolder else { return }
+        let compress = captures.compressAudio
+        let files = [NoteCopy.microphoneFile, NoteCopy.systemFile].map { noteFolder.appendingPathComponent($0) }
+        await Task.detached(priority: .userInitiated) {
+            for file in files where FileManager.default.fileExists(atPath: file.path) { try? compress(file) }
+        }.value
     }
 
     private func deleteCapturedAudio() {
@@ -868,6 +883,8 @@ struct NoteCaptureFactory {
     var makeMicrophone: () -> any NoteCaptureSource
     var makeSystemTap: () -> any NoteCaptureSource
     var makeWriter: (URL) throws -> AudioFileWriter
+    /// Turns a closed recording into the saved M4A.
+    var compressAudio: @Sendable (URL) throws -> Void = { try AudioCompressor.replace($0) }
     var requestMicrophoneAccess: () async -> Bool
     var systemAudioSupported: () -> Bool
 

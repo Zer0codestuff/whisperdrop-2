@@ -30,4 +30,4 @@ jobs:
           xcodebuild -version
           swift --version
       - name: Test Swift package
-        run: swift test
+        run: swift test --build-system native
