@@ -131,8 +131,7 @@ enum NoteSpeakers {
 
 enum NoteAudio {
     static func savedFiles(in folder: URL) -> [URL] {
-        let files = [NoteCopy.microphoneFile, NoteCopy.systemFile].map { folder.appendingPathComponent($0) }
-            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        let files = SavedLibrary.recordings(in: folder).map(\.file)
         return files.isEmpty ? [folder] : files
     }
     /// Anything louder than this counts as non-silent when confirming the system tap. Exact zeros do not.

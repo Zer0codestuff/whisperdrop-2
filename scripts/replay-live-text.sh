@@ -12,4 +12,4 @@ export WHISPERDROP_LIVE_REPORT="$2"
 [[ -n "${3:-}" ]] && export WHISPERDROP_LIVE_LANGUAGE="$3"
 export WHISPERDROP_LIVE_PIECE="${4:-60}"
 scripts/stage-parakeet-server.sh
-swift test --filter LiveTextReplayTests/testLiveTextReplay
+swift test --build-system native --filter LiveTextReplayTests/testLiveTextReplay

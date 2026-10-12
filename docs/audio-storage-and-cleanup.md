@@ -6,13 +6,33 @@ Version 2.2.0 adds configurable saved folders, quiet-audio preprocessing and tra
 
 The default destination is `~/Documents/WhisperDrop/`, with `Audio` and `Transcripts` subfolders. Settings, General, Saved files selects the parent destination and moves managed files. Export starts in Transcripts but still permits a separate save location. Models and temporary work stay in Application Support.
 
-Legacy note CAF files move into Audio. Note recovery JSON and generated TXT, SRT and VTT files live in Transcripts. Each note keeps its folder identifier. Original audio is copied byte for byte. The app verifies SHA-256, atomically commits the destination and job URLs in history.json, then removes verified source files. A pending previous destination lets relaunch finish interrupted cleanup. Conflicting files are never overwritten. Unrelated files in a selected parent folder remain untouched.
+Legacy note recordings move into Audio. Note recovery JSON and generated TXT, SRT and VTT files live in Transcripts. When the library moves, files are copied byte for byte. The app verifies SHA-256, atomically commits the destination and job URLs in history.json, then removes verified source files. A pending previous destination lets relaunch finish interrupted cleanup. Conflicting files are never overwritten. Unrelated files in a selected parent folder remain untouched.
 
 An explicit `--data-dir` keeps saved files inside that isolated directory by default, so verification cannot migrate the real library or write to Documents.
 
+## Note names and audio format
+
+A note's Audio and Transcripts folders carry its title, and so does its recording: `Audio/Lesson 1/Lesson 1.m4a`. A note that recorded both sources has `Lesson 1 - You.m4a` and `Lesson 1 - Others.m4a`. In a name, `/` and `\` become `-` and `:` becomes `.`, because Finder shows a colon as a slash. A second note with the same title gets `Lesson 1 2`. Renaming a note renames its folders and recordings. Other files in a note's audio folder are left alone.
+
+While a note records, its folders use a temporary identifier, since the title can still change. Naming happens when the note is saved. The new job URLs and the list of renames are committed together in history.json, then the renames run and the list is cleared. Relaunch finishes a list that was interrupted. A rename that fails is put back and the previous title stays. On launch, notes from earlier versions whose folders still carry an identifier are named the same way.
+
+Recording still appends 16 kHz mono PCM to a CAF, because that file stays readable after a crash. When the note ends, each CAF is converted to AAC in an M4A file at 48 kbit/s, about 22 MB per hour instead of 115 MB. The CAF is removed only after the M4A reports the same number of frames. A recording that cannot be converted stays as it is. A quitting app skips the conversion, and the next launch does it. On launch, recordings that earlier versions saved as CAF are converted in the background and each original goes to the Trash after the same check. Renaming notes and moving the library wait until that is done.
+
+48 kbit/s is the most Apple's encoder accepts for 16 kHz mono. It was chosen over 32 kbit/s after decoding the M4A back to PCM and transcribing it with Parakeet v3 through `scripts/replay-note.sh` (October 12, 2026):
+
+| Audio | PCM | AAC 32 kbit/s | AAC 48 kbit/s |
+| --- | --- | --- | --- |
+| Synthetic Italian reference, 347 words, errors | 7 | 7 | 7 |
+| Same reference at 3% amplitude with inference gain, errors | 7 | 9 | 7 |
+| 4-minute real lecture excerpt, words differing from the PCM transcript | 0 | 94 of 327 | 43 of 327 |
+
+The lecture excerpt has no reference transcript and Parakeet is unstable on it: lowering the PCM level by 0.3, 0.5 and 0.9 dB changed 55, 64 and 73 words. The 48 kbit/s result sits below that range and the 32 kbit/s result above it. These are three small samples, not a general accuracy claim.
+
+A silent session replay of the same excerpt at recording speed dropped no packets. The PCM handed to the converter matched the input within one quantization step and the saved M4A held all 3,840,000 frames. A dry run of the launch conversion on a copy of a real library named seven notes and converted six recordings, 1,020.5 MB to 191.3 MB, in 17.3 seconds on an M4. Every M4A had its CAF's frame count and the transcripts were unchanged.
+
 ## Quiet audio
 
-Inference can boost quiet speech using its 70th-percentile 20 ms frame RMS, with a maximum gain of four. Gain requires a voice level between 0.0005 and 0.015 and at least six times the 10th-percentile floor. Quiet audio dominated by noise is left at its original level. Ten milliseconds of peak lookahead and a 120 ms release keep boosted peaks below 0.98 without shifting, trimming or extending samples. A local Silero check on original audio limits gain to detected voice regions with 20 ms fades. Weak speech outside those regions remains at its original level. Failed voice checks skip gain. The recorded CAF stays unchanged.
+Inference can boost quiet speech using its 70th-percentile 20 ms frame RMS, with a maximum gain of four. Gain requires a voice level between 0.0005 and 0.015 and at least six times the 10th-percentile floor. Quiet audio dominated by noise is left at its original level. Ten milliseconds of peak lookahead and a 120 ms release keep boosted peaks below 0.98 without shifting, trimming or extending samples. A local Silero check on original audio limits gain to detected voice regions with 20 ms fades. Weak speech outside those regions remains at its original level. Failed voice checks skip gain. The recording stays unchanged.
 
 Notes freeze the boost preference at recording start. File imports freeze it at queue start and process at most 60 seconds of samples at once. The option is in General settings. Dictation keeps its existing low-latency path.
 

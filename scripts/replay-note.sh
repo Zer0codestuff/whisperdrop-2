@@ -10,4 +10,4 @@ export WHISPERDROP_REPLAY_REPORT="$2"
 export WHISPERDROP_REPLAY_MODEL="${3:-turbo}"
 export WHISPERDROP_REPLAY_POLICY="${4:-lecture}"
 if [[ "$WHISPERDROP_REPLAY_MODEL" == parakeet* ]]; then scripts/stage-parakeet-server.sh; fi
-swift test --filter NoteReplayTests/testReplay
+swift test --build-system native --filter NoteReplayTests/testReplay

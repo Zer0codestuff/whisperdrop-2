@@ -17,7 +17,7 @@ Parakeet v3 is an offline model; it has no cache-aware streaming mode. Notes emu
 
 ## Pause and resume
 
-**Pause** stops the capture sources and keeps the audio writers open. Parakeet notes settle every word recorded so far; Whisper notes flush their chunker and transcribe the tail. The note's model lease is then released, so the model can unload according to **Unload model**. **Resume** restarts the same sources, appends to the same CAF files and reloads the model if needed. Recording time and timestamps count recorded audio only, so they match the saved files. As while recording, writing tools wait until the note is saved.
+**Pause** stops the capture sources and keeps the audio writers open. Parakeet notes settle every word recorded so far; Whisper notes flush their chunker and transcribe the tail. The note's model lease is then released, so the model can unload according to **Unload model**. **Resume** restarts the same sources, appends to the same recording files and reloads the model if needed. Recording time and timestamps count recorded audio only, so they match the saved files. As while recording, writing tools wait until the note is saved.
 
 ## Streaming validation (October 6, 2026)
 
@@ -44,7 +44,7 @@ Whisper notes use local whisper.cpp with Metal. Every 500 ms, the recorder feeds
 - Requests disable whisper-server's character wrapping. That wrapping previously split words such as `internaz` and `ionale` into separate segments.
 - Reading paragraphs are independent of model segments and subtitle timing. Paragraph breaks follow sentence endings, pauses and speaker changes.
 - The capture queue preserves packet order when slots are reused. It reports overflow. Disk writes run on another queue and synchronize about once per second.
-- Language and Keep audio are visible beside New note. First use reminds the user to check language. Saved notes expose their CAF files in Finder. Optional subject vocabulary is in Settings.
+- Language and Keep audio are visible beside New note. First use reminds the user to check language. Saved notes expose their audio in Finder. Optional subject vocabulary is in Settings.
 - The recorder preserves legitimate repeated sentences and displays capture, write and transcription warnings in saved notes. Recording duration excludes time spent finishing transcription.
 
 ## Measurements

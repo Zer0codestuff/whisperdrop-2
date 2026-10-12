@@ -165,13 +165,15 @@ private struct GeneralPane: View {
             HStack(spacing: 12) {
                 Button("Show") { NSWorkspace.shared.open(store.savedFolder) }
                 Button("Choose…", action: store.chooseSavedFolder)
-                    .disabled(store.busy || store.importing || store.movingSavedFiles || LiveNote.isActive(recorder.state))
+                    .disabled(store.busy || store.importing || store.movingSavedFiles || store.compressingAudio || LiveNote.isActive(recorder.state))
             }.controlSize(.small)
         }
         Text(store.savedFolder.path).font(.system(size: 11)).foregroundStyle(LivePalette.secondary)
             .textSelection(.enabled).fixedSize(horizontal: false, vertical: true).padding(.bottom, 12)
         if store.movingSavedFiles {
             Text("Moving saved files…").font(.system(size: 11)).foregroundStyle(LivePalette.green).padding(.bottom, 12)
+        } else if store.compressingAudio {
+            Text("Compressing saved audio…").font(.system(size: 11)).foregroundStyle(LivePalette.green).padding(.bottom, 12)
         }
         SettingRow(title: "Boost quiet audio", detail: "Raises quiet speech in notes and files when background noise is low. Original audio is kept unchanged.") {
             Switch(isOn: $settings.automaticAudioBoost)

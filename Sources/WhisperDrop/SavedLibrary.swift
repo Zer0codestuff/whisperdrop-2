@@ -6,6 +6,8 @@ struct LibrarySnapshot: Codable {
     var savedFolder: URL
     var jobs: [TranscriptionJob]
     var pendingPreviousFolder: URL? = nil
+    /// Renames committed with the job URLs that rely on them. Relaunch finishes an interrupted list.
+    var pendingRenames: [SavedLibrary.Rename]? = nil
 }
 
 enum SavedLibrary {
@@ -43,6 +45,99 @@ enum SavedLibrary {
             }
             if try fm.contentsOfDirectory(atPath: folder.path).isEmpty { try fm.removeItem(at: folder) }
         }
+    }
+
+    struct Rename: Codable, Equatable {
+        var from: URL
+        var to: URL
+    }
+
+    /// A title as a folder or file name. Finder shows a colon as a slash, so neither is kept.
+    static func fileName(for title: String) -> String {
+        var name = String(title.map { character -> Character in
+            if character == "/" || character == "\\" { return "-" }
+            if character == ":" { return "." }
+            return character.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) || CharacterSet.newlines.contains($0) } ? " " : character
+        }).trimmingCharacters(in: .whitespaces)
+        while name.hasPrefix(".") { name.removeFirst() }
+        // Leaves room for a speaker suffix and an extension inside the 255-byte limit.
+        while name.utf8.count > 200 { name.removeLast() }
+        name = name.trimmingCharacters(in: .whitespaces)
+        return name.isEmpty ? "Note" : name
+    }
+
+    /// The recordings the app wrote in a note's audio folder, with the speaker each holds when a note has two.
+    /// Other files in the folder belong to the user and are left alone.
+    static func recordings(in folder: URL) -> [(file: URL, speaker: Speaker?)] {
+        let name = folder.lastPathComponent
+        let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        return files.sorted { $0.lastPathComponent < $1.lastPathComponent }.compactMap { file in
+            guard ["caf", AudioCompressor.fileExtension].contains(file.pathExtension.lowercased()) else { return nil }
+            switch file.deletingPathExtension().lastPathComponent {
+            case name: return (file, nil)
+            case "you", "\(name) - \(Speaker.you.label)": return (file, .you)
+            case "others", "\(name) - \(Speaker.others.label)": return (file, .others)
+            default: return nil
+            }
+        }
+    }
+
+    /// The renames that give a note's folders and recordings the name of its title. Nothing changes on disk until `apply`.
+    /// A second note with the same title gets a number after its name.
+    static func naming(_ job: TranscriptionJob, as title: String) -> (job: TranscriptionJob, renames: [Rename]) {
+        guard job.resolvedKind == .note else { return (job, []) }
+        let fm = FileManager.default
+        func sibling(_ folder: URL, _ name: String) -> URL { folder.deletingLastPathComponent().appendingPathComponent(name, isDirectory: true) }
+        var folders = [job.source]
+        if let audio = job.audioFile, audio.standardizedFileURL.path != job.source.standardizedFileURL.path { folders.insert(audio, at: 0) }
+        let base = fileName(for: title)
+        var name = base, attempt = 1
+        while folders.contains(where: { fm.fileExists(atPath: sibling($0, name).path) && !sameItem(sibling($0, name), $0) }) {
+            attempt += 1
+            name = "\(base) \(attempt)"
+        }
+        var renames: [Rename] = []
+        if let audio = job.audioFile {
+            let recordings = recordings(in: audio)
+            let labeled = Set(recordings.compactMap(\.speaker)).count == 2
+            for (file, speaker) in recordings {
+                let stem = labeled ? speaker.map { "\(name) - \($0.label)" } ?? name : name
+                let target = audio.appendingPathComponent(stem).appendingPathExtension(file.pathExtension)
+                if file.lastPathComponent != target.lastPathComponent, !fm.fileExists(atPath: target.path) { renames.append(Rename(from: file, to: target)) }
+            }
+        }
+        renames += folders.filter { $0.lastPathComponent != name }.map { Rename(from: $0, to: sibling($0, name)) }
+        var named = job
+        named.source = sibling(job.source, name)
+        if let audio = job.audioFile { named.audioFile = sibling(audio, name) }
+        return (named, renames)
+    }
+
+    /// A step that already happened is skipped, so an interrupted list can be applied again.
+    static func apply(_ renames: [Rename]) throws {
+        let fm = FileManager.default
+        for rename in renames where fm.fileExists(atPath: rename.from.path) {
+            if fm.fileExists(atPath: rename.to.path) {
+                // The same folder under another letter case keeps its name on a case-insensitive disk.
+                if sameItem(rename.from, rename.to) { continue }
+                throw AppFailure("A different item already exists at \(rename.to.path). Nothing was replaced.")
+            }
+            try fm.moveItem(at: rename.from, to: rename.to)
+        }
+    }
+
+    /// Puts back the steps of a list that failed part way.
+    static func revert(_ renames: [Rename]) {
+        let fm = FileManager.default
+        for rename in renames.reversed() where fm.fileExists(atPath: rename.to.path) && !fm.fileExists(atPath: rename.from.path) {
+            try? fm.moveItem(at: rename.to, to: rename.from)
+        }
+    }
+
+    private static func sameItem(_ first: URL, _ second: URL) -> Bool {
+        guard let one = try? first.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier,
+              let other = try? second.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier else { return false }
+        return one.isEqual(other)
     }
 
     static func prepare(_ folder: URL) throws {
