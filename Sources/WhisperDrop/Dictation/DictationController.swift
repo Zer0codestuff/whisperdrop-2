@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import WhisperDropCore
 
@@ -48,6 +49,7 @@ final class DictationController: ObservableObject {
     private let insertionSelection = TextSelectionService()
     private var insertionTarget: TextInsertionTarget?
     private var cue: NSSound?
+    private var activation: AnyCancellable?
 
     private static let maxListenNanos: UInt64 = 600_000_000_000
     private static let failNanos: UInt64 = 2_500_000_000
@@ -70,6 +72,9 @@ final class DictationController: ObservableObject {
         monitor.onEscape = { [weak self] in
             self?.handleEscape()
         }
+        activation = NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in MainActor.assumeIsolated { self?.refresh() } }
     }
 
     private func connect(_ source: any NoteCaptureSource) {
@@ -115,9 +120,7 @@ final class DictationController: ObservableObject {
             return
         }
         monitor.hotkey = settings.hotkey
-        if !monitor.isRunning {
-            monitor.start()
-        }
+        monitor.start()
     }
 
     /// Manual control, e.g. from the menu bar.

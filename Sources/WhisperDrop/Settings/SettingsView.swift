@@ -210,10 +210,16 @@ private struct GeneralPane: View {
 private struct DictationPane: View {
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var dictation: DictationController
+    @EnvironmentObject private var permissions: Permissions
     var body: some View {
         PaneHeader(title: "Dictation", subtitle: "Talk into any app. Text is transcribed on this Mac and typed where your cursor is.")
         SettingRow(title: "Dictation", detail: "Listen for the shortcut in every app.", divider: false) {
             Switch(isOn: $settings.dictationEnabled)
+        }
+        if settings.dictationEnabled, permissions.status[.inputMonitoring] != .granted {
+            SettingRow(title: "Input Monitoring", detail: "The shortcut cannot listen until this permission is allowed. Return to WhisperDrop after enabling it.") {
+                Button("Allow…") { permissions.request(.inputMonitoring) }.buttonStyle(LiveQuietButton())
+            }
         }
         SettingRow(title: "Shortcut", detail: LiveFormat.dictationHint(settings.hotkey, settings.dictationMode) + " to talk.") {
             Picker("", selection: $settings.hotkey) {

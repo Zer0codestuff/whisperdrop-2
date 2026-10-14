@@ -15,7 +15,8 @@ let package = Package(
     ],
     targets: [
         .target(name: "WhisperDropCore"),
-        .executableTarget(name: "WhisperDrop", dependencies: ["WhisperDropCore", .product(name: "Sparkle", package: "Sparkle")],
+        .target(name: "AudioCaptureBridge"),
+        .executableTarget(name: "WhisperDrop", dependencies: ["WhisperDropCore", "AudioCaptureBridge", .product(name: "Sparkle", package: "Sparkle")],
                           linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
         // Parakeet TDT graph from mlx-audio-swift (MIT), without its Hugging Face loader.
         .target(name: "ParakeetMLX", dependencies: [
