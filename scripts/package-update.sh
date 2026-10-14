@@ -6,7 +6,10 @@ tools='.runtime/sparkle-2.10.0/bin'
 [[ -x "$tools/generate_appcast" ]] || { echo 'Run scripts/prepare-updater.sh first.' >&2; exit 1; }
 codesign --verify --deep --strict "$app"
 account='io.github.zer0codestuff.whisperdrop2.sparkle'
-public_key="$($tools/generate_keys --account "$account" -p)"
+if ! public_key="$($tools/generate_keys --account "$account" -p)"; then
+  echo "The Sparkle signing key is not available in the login Keychain for $account. Restore the original key before packaging an update. Do not generate a replacement key." >&2
+  exit 1
+fi
 embedded_key="$(plutil -extract SUPublicEDKey raw -o - "$app/Contents/Info.plist")"
 [[ "$public_key" == "$embedded_key" ]] || { echo 'The signing key does not match this app. Do not generate a replacement key.' >&2; exit 1; }
 version="$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")"

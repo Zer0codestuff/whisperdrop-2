@@ -1,8 +1,56 @@
 import AVFoundation
+import AudioCaptureBridge
 import XCTest
 @testable import WhisperDrop
 
 final class CaptureTests: XCTestCase {
+    func testMismatchedHardwareFormatReturnsAnError() throws {
+        let engine = AVAudioEngine()
+        let input = engine.inputNode
+        let hardware = input.inputFormat(forBus: 0)
+        try XCTSkipUnless(hardware.sampleRate > 0 && hardware.channelCount > 0, "No audio input hardware")
+        let wrongRate: Double = hardware.sampleRate == 16_000 ? 48_000 : 16_000
+        let stale = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: wrongRate, channels: hardware.channelCount))
+        // This is the failure recorded in the user's crash log. No engine starts or audio is recorded.
+        XCTAssertThrowsError(try WDAudioCaptureBridge.installTap(on: input, bufferSize: AVAudioFrameCount(wrongRate * 0.1), format: stale, block: { _, _ in })) {
+            XCTAssertFalse($0.localizedDescription.isEmpty)
+        }
+    }
+
+    func testTapFailureIsRecoverableAndTheNodeCanBeUsedAgain() throws {
+        let engine = AVAudioEngine()
+        let node = AVAudioMixerNode()
+        engine.attach(node)
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        try WDAudioCaptureBridge.installTap(on: node, bufferSize: 4_800, format: format, block: { _, _ in })
+        defer { node.removeTap(onBus: 0) }
+        // A second tap raises an NSException on older systems. It must become a Swift error.
+        XCTAssertThrowsError(try WDAudioCaptureBridge.installTap(on: node, bufferSize: 4_800, format: format, block: { _, _ in })) {
+            XCTAssertFalse($0.localizedDescription.isEmpty)
+        }
+        node.removeTap(onBus: 0)
+        try WDAudioCaptureBridge.installTap(on: node, bufferSize: 4_800, format: format, block: { _, _ in })
+    }
+
+    /// Opt-in, discards all microphone samples. Verifies the actual default-device route and repeated starts.
+    func testMicrophoneStartsRepeatedlyWithCurrentHardware() throws {
+        guard ProcessInfo.processInfo.environment["WHISPERDROP_VERIFY_MICROPHONE"] == "1" else {
+            throw XCTSkip("Set WHISPERDROP_VERIFY_MICROPHONE=1 to verify the local microphone")
+        }
+        try XCTSkipUnless(MicCapture.isAuthorized, "Microphone access is not granted to the test runner")
+        let capture = MicCapture()
+        defer { capture.stop() }
+        for _ in 0..<3 {
+            let delivered = DispatchSemaphore(value: 0)
+            capture.onSamples = { samples in
+                if !samples.isEmpty { delivered.signal() }
+            }
+            try capture.start()
+            XCTAssertEqual(delivered.wait(timeout: .now() + 5), .success)
+            capture.stop()
+        }
+    }
+
     func testHandoffKeepsCaptureOrderWhenEarlierSlotsAreReused() throws {
         let firstEntered = DispatchSemaphore(value: 0)
         let releaseFirst = DispatchSemaphore(value: 0)

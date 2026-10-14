@@ -34,12 +34,13 @@ final class HotkeyMonitor {
     /// Starts monitoring. Returns false if Input Monitoring is missing or the tap cannot be created.
     /// Does not prompt; call `CGRequestListenEventAccess` from the UI after explaining why.
     @discardableResult func start() -> Bool {
-        if isRunning { return true }
         guard CGPreflightListenEventAccess() else {
+            if isRunning { stop() }
             requiredPermissionMissing = true
             return false
         }
         requiredPermissionMissing = false
+        if isRunning { return true }
 
         let info = Unmanaged.passUnretained(self).toOpaque()
         let full = Self.mask(.flagsChanged) | Self.mask(.keyDown) | Self.maskRaw(Self.systemDefinedRaw)

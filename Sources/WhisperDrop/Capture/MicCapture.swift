@@ -1,5 +1,6 @@
 import AudioToolbox
 import AVFoundation
+import AudioCaptureBridge
 import Foundation
 import os
 
@@ -92,10 +93,12 @@ final class MicCapture: NoteCaptureSource, @unchecked Sendable {
     private func installTapAndStart() throws {
         // Opening a Bluetooth headset mic drops that headset into its low-quality speaking mode.
         // Point the input unit at the built-in mic when there is one, and leave the system output alone.
-        preferBuiltInInputIfBluetooth()
+        try preferBuiltInInputIfBluetooth()
         let input = engine.inputNode
-        let hardware = input.outputFormat(forBus: 0)
-        guard hardware.sampleRate > 0, hardware.channelCount > 0 else {
+        // The output bus can retain the Bluetooth format after changing the input unit's device.
+        // The input bus describes the current hardware, including its new sample rate.
+        let hardware = input.inputFormat(forBus: 0)
+        guard hardware.sampleRate.isFinite, hardware.sampleRate > 0, hardware.channelCount > 0 else {
             throw CaptureError.microphoneUnavailable("No microphone is available.")
         }
         prepareHandoff(for: hardware)
@@ -105,7 +108,7 @@ final class MicCapture: NoteCaptureSource, @unchecked Sendable {
             tapInstalled = false
         }
         let bufferSize = Self.bufferSize(for: hardware)
-        install(on: input, bufferSize: bufferSize, format: hardware)
+        try install(on: input, bufferSize: bufferSize, format: hardware)
         if configObserver == nil {
             // The engine posts this on an internal queue and has already stopped itself.
             // Do not deallocate the engine from that callback.
@@ -122,22 +125,25 @@ final class MicCapture: NoteCaptureSource, @unchecked Sendable {
         }
         // Set before `start` so the first buffers are not dropped.
         running.withLockUnchecked { $0 = true }
-        engine.prepare()
         do {
-            try engine.start()
+            try WDAudioCaptureBridge.start(engine)
         } catch {
             throw CaptureError.microphoneUnavailable(error.localizedDescription)
         }
     }
 
-    private func install(on input: AVAudioInputNode, bufferSize: AVAudioFrameCount, format: AVAudioFormat) {
+    private func install(on input: AVAudioInputNode, bufferSize: AVAudioFrameCount, format: AVAudioFormat) throws {
         let block: AVAudioNodeTapBlock = { [weak self] buffer, _ in
             guard let self else { return }
             guard self.running.withLockIfAvailableUnchecked({ $0 }) == true else { return }
             self.handoff?.publish(buffer)
         }
-        // The error-returning replacement is macOS 27 only. The void method remains the one this deployment target can call.
-        input.installTap(onBus: 0, bufferSize: bufferSize, format: format, block: block)
+        // Swift cannot catch the NSException raised by the legacy tap API.
+        do {
+            try WDAudioCaptureBridge.installTap(on: input, bufferSize: bufferSize, format: format, block: block)
+        } catch {
+            throw CaptureError.microphoneUnavailable(error.localizedDescription)
+        }
         tapInstalled = true
     }
 
@@ -165,16 +171,21 @@ final class MicCapture: NoteCaptureSource, @unchecked Sendable {
         }
     }
 
-    private func preferBuiltInInputIfBluetooth() {
+    private func preferBuiltInInputIfBluetooth() throws {
         guard let current = AudioInputDevices.defaultInput(),
               AudioInputDevices.isBluetooth(current),
               let builtIn = AudioInputDevices.builtInInput(),
               let unit = engine.inputNode.audioUnit else {
             return
         }
-        var device = builtIn
+        var device = AudioDeviceID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let currentStatus = AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
+                                                kAudioUnitScope_Global, 0, &device, &size)
+        if currentStatus == noErr, device == builtIn { return }
+        device = builtIn
         // Scope is global. This does not change the system default output device.
-        AudioUnitSetProperty(
+        let status = AudioUnitSetProperty(
             unit,
             kAudioOutputUnitProperty_CurrentDevice,
             kAudioUnitScope_Global,
@@ -182,17 +193,18 @@ final class MicCapture: NoteCaptureSource, @unchecked Sendable {
             &device,
             UInt32(MemoryLayout<AudioDeviceID>.size)
         )
+        guard status == noErr else {
+            throw CaptureError.microphoneUnavailable("The built-in microphone could not be selected. Reconnect your audio device and try again.")
+        }
     }
 
     private func handleConfigurationChange() {
         let active = running.withLockUnchecked { $0 }
-        guard active, !reconfiguring else { return }
+        // A notification queued during our own device switch can arrive after start succeeded.
+        guard active, !engine.isRunning, !reconfiguring else { return }
         reconfiguring = true
         defer { reconfiguring = false }
-        if tapInstalled {
-            engine.inputNode.removeTap(onBus: 0)
-            tapInstalled = false
-        }
+        releaseEngine()
         do {
             try installTapAndStart()
         } catch {
