@@ -43,6 +43,7 @@ final class DictationController: ObservableObject {
     private var listenLimitTask: Task<Void, Never>?
     private var failTask: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
+    private var captureHealthTask: Task<Void, Never>?
     private var live = LiveText()
     private var writer: LiveTextWriter?
     private var writerMode: LiveTextWriter.Mode?
@@ -50,17 +51,25 @@ final class DictationController: ObservableObject {
     private var insertionTarget: TextInsertionTarget?
     private var cue: NSSound?
     private var activation: AnyCancellable?
+    private let microphoneAuthorized: () -> Bool
+    private let requestMicrophoneAccess: () async -> Bool
+    private let showHUD: Bool
 
     private static let maxListenNanos: UInt64 = 600_000_000_000
     private static let failNanos: UInt64 = 2_500_000_000
     private static let recentLimit = 20
     private static let previewInterval: Duration = .milliseconds(800)
 
-    init(settings: AppSettings, host: ModelHost) {
+    init(settings: AppSettings, host: ModelHost, microphone: any NoteCaptureSource = MicCapture(),
+         microphoneAuthorized: @escaping () -> Bool = { MicCapture.isAuthorized },
+         requestMicrophoneAccess: @escaping () async -> Bool = { await MicCapture.requestAccess() }, showHUD: Bool = true) {
         self.settings = settings
         self.host = host
         self.monitor = HotkeyMonitor()
-        self.mic = MicCapture()
+        self.mic = microphone
+        self.microphoneAuthorized = microphoneAuthorized
+        self.requestMicrophoneAccess = requestMicrophoneAccess
+        self.showHUD = showHUD
         self.gesture = DictationGesture(
             mode: settings.dictationMode,
             doubleTapInterval: NSEvent.doubleClickInterval
@@ -260,8 +269,8 @@ final class DictationController: ObservableObject {
         // Hop so a slow device open does not stall the listen-only event tap.
         Task { [weak self] in
             guard let self else { return }
-            if !self.replaying, !MicCapture.isAuthorized {
-                let granted = await MicCapture.requestAccess()
+            if !self.replaying, !self.microphoneAuthorized() {
+                let granted = await self.requestMicrophoneAccess()
                 guard token == self.generation else { return }
                 guard granted else {
                     self.gesture.reset()
@@ -291,7 +300,23 @@ final class DictationController: ObservableObject {
         }
         play("Tink", volume: 0.22)
         armListenLimit(token: token)
+        monitorCapture(token: token)
         startPreview(token: token)
+    }
+
+    private func monitorCapture(token: Int) {
+        captureHealthTask?.cancel()
+        captureHealthTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard let self, !Task.isCancelled, token == self.generation, case .listening = self.state else { return }
+                if self.mic.failureMessage != nil {
+                    self.gesture.reset()
+                    self.finish(microphoneIssue: "The microphone stopped. Dictation may be incomplete.")
+                    return
+                }
+            }
+        }
     }
 
     /// Decodes the newest audio about every 0.8 seconds while listening, one request at a time. `LiveText` settles
@@ -358,7 +383,7 @@ final class DictationController: ObservableObject {
         Task { await writer.cancel() }
     }
 
-    private func finish() {
+    private func finish(microphoneIssue: String? = nil) {
         guard case .listening = state else { return }
         stopTimers()
         generation += 1
@@ -400,7 +425,7 @@ final class DictationController: ObservableObject {
                 guard token == self.generation else { await writer?.cancel(); return }
                 guard let text else {
                     await writer?.cancel()
-                    self.quietIdle(token)
+                    if let microphoneIssue { self.fail(microphoneIssue) } else { self.quietIdle(token) }
                     return
                 }
                 switch await writer?.finish(text) {
@@ -409,13 +434,13 @@ final class DictationController: ObservableObject {
                     guard token == self.generation else { return }
                     self.remember(text)
                     self.play("Pop", volume: 0.18)
-                    self.publish(.idle)
+                    if let microphoneIssue { self.fail(microphoneIssue) } else { self.publish(.idle) }
                     self.onComplete?(snapshot?.text ?? text, snapshot)
                 case .partial?:
                     guard token == self.generation else { return }
                     self.remember(text)
                     self.copyLast()
-                    self.fail("The text field changed. The full text is copied")
+                    self.fail([microphoneIssue, "The text field changed. The full text is copied"].compactMap { $0 }.joined(separator: " "))
                     self.onComplete?(text, nil)
                 case .untouched?, nil:
                     let lead = paste ? await Task.detached(priority: .userInitiated) { LiveTextWriter.leadingSpaceAtCaret() }.value : ""
@@ -424,7 +449,9 @@ final class DictationController: ObservableObject {
                     guard token == self.generation else { return }
                     self.remember(text)
                     self.play("Pop", volume: 0.18)
-                    if pasted {
+                    if let microphoneIssue {
+                        self.fail(pasted ? microphoneIssue : microphoneIssue + " Copied to clipboard.")
+                    } else if pasted {
                         self.publish(.idle)
                     } else {
                         self.fail("Copied to clipboard")
@@ -434,7 +461,7 @@ final class DictationController: ObservableObject {
             } catch {
                 await writer?.cancel()
                 guard token == self.generation else { return }
-                self.fail(self.message(from: error, fallback: "Transcription failed."))
+                self.fail([microphoneIssue, self.message(from: error, fallback: "Transcription failed.")].compactMap { $0 }.joined(separator: " "))
             }
         }
     }
@@ -538,6 +565,8 @@ final class DictationController: ObservableObject {
     }
 
     private func stopTimers() {
+        captureHealthTask?.cancel()
+        captureHealthTask = nil
         previewTask?.cancel()
         previewTask = nil
         preview = ""
@@ -565,7 +594,7 @@ final class DictationController: ObservableObject {
 
     private func publish(_ newState: State) {
         state = newState
-        if hud == nil {
+        if showHUD, hud == nil {
             hud = DictationHUD(controller: self)
         }
         hud?.update()

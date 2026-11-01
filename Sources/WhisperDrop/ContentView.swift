@@ -270,8 +270,10 @@ struct ContentView: View {
                     if job.segments.isEmpty {
                         Text("No speech was detected in this recording.").foregroundStyle(Palette.secondary)
                     }
-                    if let warning = job.error, !job.segments.isEmpty {
-                        Text(warning).font(.system(size: 12)).foregroundStyle(.orange)
+                    if let warning = job.error, warning != NoteCopy.noSpeech {
+                        let prefix = NoteCopy.noSpeech + "\n"
+                        Text(warning.hasPrefix(prefix) ? String(warning.dropFirst(prefix.count)) : warning)
+                            .font(.system(size: 12)).foregroundStyle(.orange)
                     }
                     ForEach(TranscriptOutput.paragraphs(job.segments, eachSentence: job.sentenceParagraphs == true)) { segment in
                         HStack(alignment: .firstTextBaseline, spacing: 22) {

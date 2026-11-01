@@ -198,6 +198,7 @@ final class SavedLibraryTests: XCTestCase {
 
         await store.compressSavedAudio()
         XCTAssertFalse(store.compressingAudio)
+        XCTAssertTrue(store.error?.contains("original audio was kept") == true)
         let compressed = audio.appendingPathComponent("Lesson - You.m4a")
         let file = try AVAudioFile(forReading: compressed)
         XCTAssertEqual(file.length, AVAudioFramePosition(samples.count))
@@ -206,6 +207,26 @@ final class SavedLibraryTests: XCTestCase {
         XCTAssertLessThan(size, original / 4)
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: audio.path).sorted(), ["Lesson - Others.caf", "Lesson - You.m4a"])
         XCTAssertEqual(try String(contentsOf: audio.appendingPathComponent("Lesson - Others.caf")), "not audio")
+    }
+
+    func testCompressionNeverReplacesOrTrustsAnExistingM4A() throws {
+        let audio = folder.appendingPathComponent("Audio")
+        try FileManager.default.createDirectory(at: audio, withIntermediateDirectories: true)
+        let original = audio.appendingPathComponent("you.caf")
+        let existing = audio.appendingPathComponent("you.m4a")
+        let writer = try AudioFileWriter(url: original)
+        writer.append([Float](repeating: 0.2, count: 16_000))
+        writer.close()
+        try AudioCompressor.replace(original, discard: { _ in })
+        let firstM4A = try Data(contentsOf: existing)
+        let replacement = try AudioFileWriter(url: original)
+        replacement.append([Float](repeating: -0.2, count: 16_000))
+        replacement.close()
+        let secondCAF = try Data(contentsOf: original)
+        XCTAssertEqual(try AVAudioFile(forReading: existing).length, try AVAudioFile(forReading: original).length)
+        XCTAssertThrowsError(try AudioCompressor.replace(original))
+        XCTAssertEqual(try Data(contentsOf: original), secondCAF)
+        XCTAssertEqual(try Data(contentsOf: existing), firstM4A)
     }
 
     func testRenameFailureKeepsThePreviousTitle() throws {
@@ -250,6 +271,40 @@ final class SavedLibraryTests: XCTestCase {
         store.save()
         XCTAssertEqual(try String(contentsOf: history), "broken history")
         XCTAssertFalse(store.canRecordNotes)
+    }
+
+    func testFailedInterruptedRenamePreservesRecoveryUntilConflictIsRemoved() throws {
+        let root = folder.appendingPathComponent("AppData")
+        let saved = root.appendingPathComponent("Saved")
+        let from = saved.appendingPathComponent("Audio/Before.m4a")
+        let to = saved.appendingPathComponent("Audio/After.m4a")
+        try write("recording", at: from)
+        try write("other file", at: to)
+        let history = root.appendingPathComponent("history.json")
+        let rename = SavedLibrary.Rename(from: from, to: to)
+        var job = TranscriptionJob(source: to)
+        job.status = .failed
+        try JSONEncoder().encode(LibrarySnapshot(savedFolder: saved, jobs: [job], pendingRenames: [rename])).write(to: history)
+
+        let store = AppStore(root: root)
+        XCTAssertNotNil(store.error)
+        XCTAssertFalse(store.canRecordNotes)
+        store.retry(job.id)
+        store.remove(job.id)
+        XCTAssertEqual(store.jobs.first?.status, .failed)
+        store.save()
+        let snapshot = try JSONDecoder().decode(LibrarySnapshot.self, from: Data(contentsOf: history))
+        XCTAssertEqual(snapshot.pendingRenames, [rename])
+        XCTAssertEqual(try String(contentsOf: from), "recording")
+        XCTAssertEqual(try String(contentsOf: to), "other file")
+
+        try FileManager.default.removeItem(at: to)
+        let reopened = AppStore(root: root)
+        XCTAssertNil(reopened.error)
+        XCTAssertTrue(reopened.canRecordNotes)
+        XCTAssertEqual(try String(contentsOf: to), "recording")
+        let recovered = try JSONDecoder().decode(LibrarySnapshot.self, from: Data(contentsOf: history))
+        XCTAssertNil(recovered.pendingRenames)
     }
 
     func testFailedCleanupKeepsItsPreviousFolderAcrossLaterSaves() throws {

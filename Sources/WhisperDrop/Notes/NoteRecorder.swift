@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import WhisperDropCore
 
 /// Records a meeting or lecture and transcribes it while it records.
@@ -22,6 +23,7 @@ final class NoteRecorder: ObservableObject {
     @Published var title = ""
     /// Shown while recording continues after a source or a chunk fails.
     @Published private(set) var warning: String?
+    @Published private(set) var pauseReason: String?
     @Published var showLanguageReminder = false
     @Published private(set) var sessionLanguage = "auto"
     /// True for Parakeet notes, which are decoded as the audio grows instead of in chunks.
@@ -53,6 +55,11 @@ final class NoteRecorder: ObservableObject {
     private let defaults: UserDefaults
     private let clock = ContinuousClock()
     private let wake = NoteWake()
+    private let sleepNotifications: NotificationCenter
+    private let lidIsClosed: () -> Bool
+    private var sleepObserver: NSObjectProtocol?
+    private var startupSuspended = false
+    private var startupContinuation: CheckedContinuation<Void, Never>?
 
     private var microphone: (any NoteCaptureSource)?
     private var systemTap: (any NoteCaptureSource)?
@@ -98,7 +105,9 @@ final class NoteRecorder: ObservableObject {
     ///   - captures: replaces the real devices in tests. Production uses `.live`.
     init(settings: AppSettings, host: ModelHost, folder: URL, onFinish: @escaping (TranscriptionJob) -> Void,
          captures: NoteCaptureFactory = .live, defaults: UserDefaults = .standard,
-         folderProvider: (() -> (audio: URL, transcripts: URL))? = nil) {
+         folderProvider: (() -> (audio: URL, transcripts: URL))? = nil,
+         sleepNotifications: NotificationCenter = NSWorkspace.shared.notificationCenter,
+         lidIsClosed: @escaping () -> Bool = NotePower.lidIsClosed) {
         self.settings = settings
         self.host = host
         self.folder = folder
@@ -106,6 +115,15 @@ final class NoteRecorder: ObservableObject {
         self.onFinish = onFinish
         self.captures = captures
         self.defaults = defaults
+        self.sleepNotifications = sleepNotifications
+        self.lidIsClosed = lidIsClosed
+        sleepObserver = sleepNotifications.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.pauseForSleep() }
+        }
+    }
+
+    deinit {
+        if let sleepObserver { sleepNotifications.removeObserver(sleepObserver) }
     }
 
     func requestStart(_ sources: NoteSources) {
@@ -153,13 +171,16 @@ final class NoteRecorder: ObservableObject {
         generation += 1
         let token = generation
         self.sources = sources
-        state = .starting
+        startupSuspended = lidIsClosed()
+        state = startupSuspended ? .paused : .starting
+        pauseReason = startupSuspended ? "Open your Mac to resume this note." : nil
         warning = nil
         stopRequested = false
         discardRequested = false
         didFinish = false
         captureStarted = false
         terminationHandoff = false
+        startTicker()
         sessionTask = Task { [weak self] in
             await self?.runSession(token: token, sources: sources)
         }
@@ -181,9 +202,33 @@ final class NoteRecorder: ObservableObject {
         wake.signal()
     }
 
+    /// Stop capture before sleep, including when microphone permission is still pending.
+    func pauseForSleep() {
+        if state == .starting {
+            startupSuspended = true
+            state = .paused
+            // A source may already be open while another source is starting on a nested run loop.
+            haltCapture()
+        } else if state == .recording {
+            pause()
+            youWriter?.flush()
+            othersWriter?.flush()
+            writePartialTranscript()
+        } else { return }
+        pauseReason = "Recording paused because your Mac was closed or went to sleep. Resume when you are ready."
+    }
+
     /// Restarts the sources that were recording, appending to the same audio files and transcript.
     func resume() {
         guard state == .paused, let model = sessionModel else { return }
+        guard !lidIsClosed() else { pauseReason = "Open your Mac to resume this note."; return }
+        if startupSuspended {
+            startupSuspended = false
+            pauseReason = nil
+            state = .starting
+            resumeStartup()
+            return
+        }
         var errors: [String] = []
         if microphoneActive, let writer = youWriter {
             do { microphone = try startSource(system: false, writer: writer) } catch { errors.append(error.localizedDescription) }
@@ -206,14 +251,27 @@ final class NoteRecorder: ObservableObject {
         didFlushChunkers = false
         startedAt = clock.now
         state = .recording
+        pauseReason = nil
     }
 
     /// Stops capture, transcribes remaining audio, then calls `onFinish`.
     func stop() {
         guard state == .starting || state == .recording || state == .paused else { return }
+        if !captureStarted, noteFolder == nil {
+            generation += 1
+            stopRequested = true
+            resumeStartup()
+            sessionTask?.cancel()
+            tickerTask?.cancel()
+            tickerTask = nil
+            resetFields()
+            state = .idle
+            return
+        }
         updateElapsed()
         state = .finishing
         stopRequested = true
+        resumeStartup()
         haltCapture()
         drainPendingAudio(flush: true)
         wake.signal()
@@ -225,6 +283,7 @@ final class NoteRecorder: ObservableObject {
         generation += 1
         discardRequested = true
         stopRequested = true
+        resumeStartup()
         haltCapture()
         transcribeTask?.cancel()
         sessionTask?.cancel()
@@ -242,12 +301,17 @@ final class NoteRecorder: ObservableObject {
     /// Also flushes the chunkers and wakes the transcription loop so a run loop that is still
     /// spinning can finish the note. This method does not wait for that loop.
     func finishForTermination() {
+        if !captureStarted, noteFolder == nil, state == .starting || state == .paused {
+            stop()
+            return
+        }
         terminationHandoff = true
         if state == .starting || state == .recording || state == .paused {
             updateElapsed()
             state = .finishing
             stopRequested = true
         }
+        resumeStartup()
         haltCapture()
         drainPendingAudio(flush: true)
         closeWriters()
@@ -258,8 +322,12 @@ final class NoteRecorder: ObservableObject {
     }
 
     private func runSession(token: Int, sources: NoteSources) async {
+        await waitForStartupResume()
+        guard token == generation, !discardRequested else { return }
+        if stopRequested { await finishIfNeeded(token: token); return }
         if sources.usesMicrophone {
             let allowed = await captures.requestMicrophoneAccess()
+            await waitForStartupResume()
             guard token == generation, !discardRequested else { return }
             if stopRequested {
                 await finishIfNeeded(token: token)
@@ -317,13 +385,27 @@ final class NoteRecorder: ObservableObject {
         startedAt = clock.now
         lastPartialSave = startedAt
         state = .recording
-        startTicker()
+        if startupSuspended {
+            // Sleep may arrive while a capture source is opening. Stop it as soon as open returns.
+            startupSuspended = false
+            pause()
+        }
         if stopRequested {
             haltCapture()
             drainPendingAudio(flush: true)
         }
         if streaming { await streamUntilStopped(token: token) } else { await processUntilStopped(token: token) }
         await finishIfNeeded(token: token)
+    }
+
+    private func waitForStartupResume() async {
+        guard startupSuspended, !stopRequested, !discardRequested else { return }
+        await withCheckedContinuation { startupContinuation = $0 }
+    }
+
+    private func resumeStartup() {
+        startupContinuation?.resume()
+        startupContinuation = nil
     }
 
     private func makeNoteFolder() throws -> URL {
@@ -451,13 +533,23 @@ final class NoteRecorder: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(500))
                 guard !Task.isCancelled else { return }
-                self?.tick()
+                guard let self, self.state != .idle else { return }
+                if case .failed = self.state { return }
+                self.tick()
             }
         }
     }
 
     private func tick() {
+        if (state == .starting || state == .recording), lidIsClosed() { pauseForSleep() }
         guard state == .recording || state == .paused || state == .finishing else { return }
+        if state == .recording, let failure = microphone?.failureMessage {
+            pause()
+            captureWarning = [captureWarning, "The microphone stopped during recording. \(failure)"]
+                .compactMap { $0 }.joined(separator: "\n")
+            publishWarning()
+            pauseReason = "Recording paused because the microphone stopped. Check your input and resume when ready."
+        }
         updateElapsed()
         checkCaptureHealth()
         drainPendingAudio(flush: false)
@@ -715,7 +807,11 @@ final class NoteRecorder: ObservableObject {
         if !keepAudio { deleteCapturedAudio() }
         // A quitting app leaves the CAF. The next launch converts it.
         else if !terminationHandoff {
-            await compressCapturedAudio()
+            if !(await compressCapturedAudio()) {
+                captureWarning = [captureWarning, "The recording could not be converted to M4A. The original audio was kept."]
+                    .compactMap { $0 }.joined(separator: "\n")
+                publishWarning()
+            }
             guard token == generation, !discardRequested else { return }
         }
         let folder = noteFolder ?? self.folder
@@ -759,12 +855,16 @@ final class NoteRecorder: ObservableObject {
     }
 
     /// A recording that cannot be converted stays as it was recorded.
-    private func compressCapturedAudio() async {
-        guard let noteFolder else { return }
+    private func compressCapturedAudio() async -> Bool {
+        guard let noteFolder else { return true }
         let compress = captures.compressAudio
         let files = [NoteCopy.microphoneFile, NoteCopy.systemFile].map { noteFolder.appendingPathComponent($0) }
-        await Task.detached(priority: .userInitiated) {
-            for file in files where FileManager.default.fileExists(atPath: file.path) { try? compress(file) }
+        return await Task.detached(priority: .userInitiated) {
+            var succeeded = true
+            for file in files where FileManager.default.fileExists(atPath: file.path) {
+                do { try compress(file) } catch { succeeded = false }
+            }
+            return succeeded
         }.value
     }
 
@@ -842,6 +942,8 @@ final class NoteRecorder: ObservableObject {
         pendingChunks = 0
         title = ""
         warning = nil
+        pauseReason = nil
+        startupSuspended = false
         transcript = NoteTranscriptState()
         queue = []
         nextSequence = 0
@@ -875,8 +977,13 @@ protocol NoteCaptureSource: AnyObject {
     var onSamples: (@Sendable ([Float]) -> Void)? { get set }
     var onLevel: (@Sendable (Float) -> Void)? { get set }
     var droppedPacketCount: Int { get }
+    var failureMessage: String? { get }
     func start() throws
     func stop()
+}
+
+extension NoteCaptureSource {
+    var failureMessage: String? { nil }
 }
 
 struct NoteCaptureFactory {

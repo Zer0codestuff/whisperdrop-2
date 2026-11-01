@@ -18,6 +18,8 @@ While a note records, its folders use a temporary identifier, since the title ca
 
 Recording still appends 16 kHz mono PCM to a CAF, because that file stays readable after a crash. When the note ends, each CAF is converted to AAC in an M4A file at 48 kbit/s, about 22 MB per hour instead of 115 MB. The CAF is removed only after the M4A reports the same number of frames. A recording that cannot be converted stays as it is. A quitting app skips the conversion, and the next launch does it. On launch, recordings that earlier versions saved as CAF are converted in the background and each original goes to the Trash after the same check. Renaming notes and moving the library wait until that is done.
 
+If the destination M4A already exists, conversion keeps both files. Equal frame counts do not establish that they contain the same audio. This also leaves both files for review if a previous conversion stopped after writing the M4A but before removing the CAF. A conversion failure appears in the saved note, or as an app error during background conversion; Activity lists the affected paths.
+
 48 kbit/s is the most Apple's encoder accepts for 16 kHz mono. It was chosen over 32 kbit/s after decoding the M4A back to PCM and transcribing it with Parakeet v3 through `scripts/replay-note.sh` (October 12, 2026):
 
 | Audio | PCM | AAC 32 kbit/s | AAC 48 kbit/s |

@@ -64,8 +64,8 @@ final class AppStore: ObservableObject {
                     pendingPreviousFolder = snapshot.pendingPreviousFolder
                     interrupted = snapshot.pendingRenames ?? []
                 } else { jobs = try JSONDecoder().decode([TranscriptionJob].self, from: data) }
-                libraryReadable = true
                 try SavedLibrary.apply(interrupted)
+                libraryReadable = true
                 for i in jobs.indices where jobs[i].status.isActive { jobs[i].status = .queued }
             }
             let migration = try SavedLibrary.migrate(jobs: jobs, from: pendingPreviousFolder, legacyRoot: self.root, to: savedFolder)
@@ -129,7 +129,11 @@ final class AppStore: ObservableObject {
         let failed = await Task.detached(priority: .utility) {
             recordings.filter { (try? AudioCompressor.replace($0, discard: discard)) == nil }
         }.value
-        if !failed.isEmpty { log("\nCould not compress \(failed.map(\.path).joined(separator: ", ")). The recordings were kept as they are.\n") }
+        if !failed.isEmpty {
+            log("\nCould not compress \(failed.map(\.path).joined(separator: ", ")). The recordings were kept as they are.\n")
+            error = [error, "Some saved recordings could not be converted to M4A. Their original audio was kept. See Activity for the file paths."]
+                .compactMap { $0 }.joined(separator: "\n")
+        }
     }
     func chooseSavedFolder() {
         guard libraryReadable, pendingPreviousFolder == nil, !busy, !importing, !movingSavedFiles, !compressingAudio, canMoveSavedFiles() else { return }
@@ -264,7 +268,7 @@ final class AppStore: ObservableObject {
     func update(_ id: UUID, _ block: (inout TranscriptionJob) -> Void) {
         if let index = jobs.firstIndex(where: { $0.id == id }) { block(&jobs[index]) }
     }
-    func retry(_ id: UUID) { guard !movingSavedFiles else { return }; update(id) { $0.status = .queued; $0.error = nil }; save() }
+    func retry(_ id: UUID) { guard libraryReadable, !movingSavedFiles else { return }; update(id) { $0.status = .queued; $0.error = nil }; save() }
     func canRenameNote(_ job: TranscriptionJob) -> Bool {
         libraryReadable && !movingSavedFiles && !compressingAudio && job.resolvedKind == .note && job.status == .completed
     }
@@ -283,7 +287,7 @@ final class AppStore: ObservableObject {
         try commit(renamed, renames: plan.renames)
     }
     func remove(_ id: UUID) {
-        guard !movingSavedFiles, let job = jobs.first(where: { $0.id == id }), !job.status.isActive else { return }
+        guard libraryReadable, !movingSavedFiles, let job = jobs.first(where: { $0.id == id }), !job.status.isActive else { return }
         jobs.removeAll { $0.id == id }
         if selection == id { selection = jobs.first?.id }
         save()
