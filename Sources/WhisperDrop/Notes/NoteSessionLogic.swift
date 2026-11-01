@@ -312,7 +312,11 @@ enum NoteJobs {
         job.audioFile = keepAudio ? folder : nil
         job.error = transcriptionWarning
         if segments.isEmpty {
-            job.error = detectedSpeech ? (transcriptionWarning ?? NoteCopy.noSpeech) : NoteCopy.noSpeech
+            if detectedSpeech {
+                job.error = transcriptionWarning ?? NoteCopy.noSpeech
+            } else {
+                job.error = [NoteCopy.noSpeech, transcriptionWarning].compactMap { $0 }.joined(separator: "\n")
+            }
         }
         return job
     }

@@ -187,6 +187,9 @@ final class NoteRecorderTests: XCTestCase {
             segments: [TranscriptSegment(id: 0, start: 0, end: 1, text: "Some speech.")], modelName: "Turbo", duration: 60,
             keepAudio: true, detectedSpeech: true, transcriptionWarning: "One chunk failed.")
         XCTAssertEqual(job.error, "One chunk failed.")
+        let silentFailure = NoteJobs.make(folder: URL(fileURLWithPath: "/tmp/example"), customTitle: "Example", recordedAt: Date(),
+            segments: [], modelName: "Turbo", duration: 3, keepAudio: true, detectedSpeech: false, transcriptionWarning: "Audio save failed.")
+        XCTAssertEqual(silentFailure.error, "No speech was detected.\nAudio save failed.")
     }
 
     func testRenumberSortsByStartThenPreviousId() {

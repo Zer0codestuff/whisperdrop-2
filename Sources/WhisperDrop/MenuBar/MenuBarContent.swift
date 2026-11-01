@@ -167,6 +167,9 @@ struct MenuBarContent: View {
                     Text("Catching up…").font(.system(size: 11)).foregroundStyle(LivePalette.secondary)
                 }
             }
+            if let reason = recorder.pauseReason {
+                Text(reason).font(.system(size: 11)).foregroundStyle(LivePalette.secondary)
+            }
             if recorder.state == .finishing {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)

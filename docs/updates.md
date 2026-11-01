@@ -12,7 +12,9 @@ The updater replaces the app bundle. Models, library files, preferences and save
 
 The private key was generated with Sparkle's official tool and is stored in the login Keychain under account `io.github.zer0codestuff.whisperdrop2.sparkle`. It is not in the repository or app bundle. Both the update archive and feed must be signed with this key. The client verifies the archive before extraction and rejects unsigned or changed feeds without a timed fallback. Production feeds require HTTPS. Loopback HTTP is accepted only by the separate verification bundle identifier.
 
-The production feed is published with the 2.6.0 GitHub release (October 6, 2026), which carries the signed `appcast.xml` and its ZIP. Versions before 2.6.0 have no updater and need one manual replacement with the DMG. Later versions update from the app.
+The production feed is published with the 2.6.0 GitHub release (October 6, 2026), which carries the signed `appcast.xml` and its ZIP. Versions before 2.6.0 have no updater and need one manual replacement with the DMG. The in-app update path requires a release signed with the original key.
+
+Version 2.6.1 is distributed by manual DMG download because the original signing key is unavailable. It is not offered by the existing updater. Keep 2.6.0 as the GitHub Latest release so its signed feed remains available to existing installations. Do not generate a replacement key without an explicitly authorized migration plan.
 
 ## Prepare a release
 

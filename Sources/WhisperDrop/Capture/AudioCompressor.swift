@@ -15,20 +15,20 @@ enum AudioCompressor {
         let folder = recording.deletingLastPathComponent()
         let destination = recording.deletingPathExtension().appendingPathExtension(fileExtension)
         let frames = try AVAudioFile(forReading: recording).length
-        // An M4A with this name can only come from an earlier conversion of the same recording.
-        if (try? AVAudioFile(forReading: destination).length) != frames {
-            for stale in (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [] where stale.lastPathComponent.hasPrefix(temporaryPrefix) {
-                try? fm.removeItem(at: stale)
-            }
-            let temporary = folder.appendingPathComponent("\(temporaryPrefix)\(UUID().uuidString).\(fileExtension)")
-            defer { try? fm.removeItem(at: temporary) }
-            try encode(recording, to: temporary)
-            guard frames > 0, try AVAudioFile(forReading: temporary).length == frames else {
-                throw AppFailure("The compressed recording could not be verified. The original was kept.")
-            }
-            if fm.fileExists(atPath: destination.path) { try fm.removeItem(at: destination) }
-            try fm.moveItem(at: temporary, to: destination)
+        // Equal duration does not prove that an existing file contains this recording.
+        guard !fm.fileExists(atPath: destination.path) else {
+            throw AppFailure("A recording already exists at \(destination.path). Both files were kept.")
         }
+        for stale in (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [] where stale.lastPathComponent.hasPrefix(temporaryPrefix) {
+            try? fm.removeItem(at: stale)
+        }
+        let temporary = folder.appendingPathComponent("\(temporaryPrefix)\(UUID().uuidString).\(fileExtension)")
+        defer { try? fm.removeItem(at: temporary) }
+        try encode(recording, to: temporary)
+        guard frames > 0, try AVAudioFile(forReading: temporary).length == frames else {
+            throw AppFailure("The compressed recording could not be verified. The original was kept.")
+        }
+        try fm.moveItem(at: temporary, to: destination)
         try discard(recording)
         return destination
     }

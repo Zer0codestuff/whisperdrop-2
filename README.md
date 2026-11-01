@@ -6,7 +6,7 @@ Turn recordings, videos and meetings into text, right on your Mac. Record a lect
 
 *A 23-second recording transcribed with Parakeet v3. Sample content with a synthetic voice.*
 
-[Download the latest version](https://github.com/Zer0codestuff/whisperdrop-2/releases/latest) · Apple Silicon · macOS 14 or later
+[Download WhisperDrop 2.6.1](https://github.com/Zer0codestuff/whisperdrop-2/releases/tag/v2.6.1) · Apple Silicon · macOS 14 or later
 
 [Use WhisperDrop Web](https://whisperdrop-web-production.up.railway.app/) · Experimental · Hardware WebGPU required
 
@@ -38,7 +38,7 @@ The web version is experimental. It does not include the Mac app's global dictat
 
 ## Get started on Mac
 
-1. Download the `.dmg` from the [latest release](https://github.com/Zer0codestuff/whisperdrop-2/releases/latest).
+1. Download the `.dmg` from the [2.6.1 release](https://github.com/Zer0codestuff/whisperdrop-2/releases/tag/v2.6.1).
 2. Drag **WhisperDrop 2.app** into Applications. If you are updating, quit the old version first and replace it.
 3. Open the app and download a model in **Settings > Models** (also reachable from **Models** in the sidebar). Start with Parakeet v3. For a language it does not cover, download the legacy Turbo model.
 4. Add a recording, paste a YouTube link, or choose **New note**.
@@ -49,7 +49,7 @@ The current release is not notarized by Apple, so macOS may block the first laun
 
 ## App updates
 
-Starting with 2.6.0, use **WhisperDrop 2 > Check for Updates…** or **Settings > General > App updates**. Daily checks are optional; installation asks for confirmation. Updating preserves downloaded models, saved files and the main writing draft. Versions before 2.6.0 have no updater and need one manual replacement first. See [in-app updates](docs/updates.md) for release setup and verified limits.
+Version 2.6.1 requires a manual download and replacement. The signing key for the existing update feed is unavailable, so **Check for Updates** does not offer 2.6.1 and the 2.6.0 feed remains unchanged. Updating preserves downloaded models, saved files and the main writing draft. See [in-app updates](docs/updates.md) for release setup and verified limits.
 
 ## Notes and dictation
 

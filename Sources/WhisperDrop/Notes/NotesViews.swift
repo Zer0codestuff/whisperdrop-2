@@ -13,6 +13,11 @@ struct LiveNoteView: View {
         VStack(spacing: 0) {
             header
             Rectangle().fill(LivePalette.line).frame(height: 1)
+            if let reason = recorder.pauseReason {
+                Label(reason, systemImage: "pause.circle")
+                    .font(.system(size: 12)).foregroundStyle(LivePalette.secondary)
+                    .padding(.horizontal, 32).padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
+            }
             if let warning = recorder.warning {
                 Text(warning).font(.system(size: 12)).foregroundStyle(.orange)
                     .padding(.horizontal, 32).padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)

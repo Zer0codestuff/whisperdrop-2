@@ -181,6 +181,13 @@ struct WhisperDropApp: App {
     }
     @MainActor private func runVerificationIfRequested() async {
         let args = ProcessInfo.processInfo.arguments
+        if args.contains("--data-dir"), let i = args.firstIndex(of: "--verify-note-sleep"), args.indices.contains(i + 1),
+           let delay = Double(args[i + 1]), delay >= 0 {
+            // Exercise the actual sleep observer in an isolated app without sleeping the user's Mac.
+            try? await Task.sleep(for: .seconds(delay))
+            NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.willSleepNotification, object: NSWorkspace.shared)
+            return
+        }
         if let i = args.firstIndex(of: "--verify-dictation"), args.indices.contains(i + 1) {
             // Silent dictation from a file into whatever has focus after the delay. For live text checks.
             let delay = args.firstIndex(of: "--verify-dictation-delay").flatMap { args.indices.contains($0 + 1) ? Double(args[$0 + 1]) : nil } ?? 5

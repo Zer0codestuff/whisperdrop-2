@@ -27,6 +27,8 @@ final class MicCapture: NoteCaptureSource, @unchecked Sendable {
     private let sessionQueue = DispatchQueue(label: "whisperdrop.microphone.session")
     private let sessionKey = DispatchSpecificKey<UInt8>()
     private let running = OSAllocatedUnfairLock(initialState: false)
+    private let captureFailure = OSAllocatedUnfairLock<String?>(initialState: nil)
+    var failureMessage: String? { captureFailure.withLockUnchecked { $0 } }
     private let listeners = OSAllocatedUnfairLock(initialState: Listeners())
     private var handoff: PCMSlotQueue?
     private var configObserver: NSObjectProtocol?
@@ -68,6 +70,7 @@ final class MicCapture: NoteCaptureSource, @unchecked Sendable {
         guard Self.isAuthorized else { throw CaptureError.microphoneDenied }
         try onSession {
             if running.withLockUnchecked({ $0 }) { return }
+            captureFailure.withLockUnchecked { $0 = nil }
             do {
                 try installTapAndStart()
             } catch {
@@ -209,6 +212,7 @@ final class MicCapture: NoteCaptureSource, @unchecked Sendable {
             try installTapAndStart()
         } catch {
             running.withLockUnchecked { $0 = false }
+            captureFailure.withLockUnchecked { $0 = error.localizedDescription }
             releaseEngine()
         }
     }
