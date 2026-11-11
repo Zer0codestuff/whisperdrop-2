@@ -175,6 +175,9 @@ private struct GeneralPane: View {
         } else if store.compressingAudio {
             Text("Compressing saved audio…").font(.system(size: 11)).foregroundStyle(LivePalette.green).padding(.bottom, 12)
         }
+        SettingRow(title: "Transcribe right away", detail: "Added files and YouTube links start at once. When this is off, they wait until you choose Transcribe.") {
+            Switch(isOn: $settings.autoTranscribe)
+        }
         SettingRow(title: "Boost quiet audio", detail: "Raises quiet speech in notes and files when background noise is low. Original audio is kept unchanged.") {
             Switch(isOn: $settings.automaticAudioBoost)
         }
@@ -531,7 +534,7 @@ private struct NotesPane: View {
                    : "\(model.name) ignores this list. It is used with Whisper models.") {
             TextField("Subject terms", text: $settings.noteVocabulary).textFieldStyle(.roundedBorder).frame(width: 230)
         }
-        SettingRow(title: "Keep audio", detail: "Saves the original recording in your Audio folder. When off, it is deleted once the transcript is saved. Also beside New note.") {
+        SettingRow(title: "Keep audio", detail: "Saves the original recording in your Audio folder. When off, it is deleted once the transcript is saved. Also in New note.") {
             Switch(isOn: $settings.keepNoteAudio)
         }
         Rectangle().fill(LivePalette.line).frame(height: 1)

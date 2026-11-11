@@ -110,7 +110,7 @@ struct GuideView: View {
                     "Choose New note in the sidebar or the menu bar. Text appears while you record, and the note is saved when you stop.")
             GuideRow(symbol: "mic", title: "You", detail: "Your microphone.", divider: false)
             GuideRow(symbol: "speaker.wave.2", title: "Others", detail: "Sound from other apps, such as a video call or a recorded lesson.")
-            GuideRow(symbol: "globe", title: "A different language once", detail: "Note language, beside New note, applies to the next note only. Then the app language returns.")
+            GuideRow(symbol: "globe", title: "A different language once", detail: "New note asks for the language of that note only. Then the app language returns.")
             GuideRow(symbol: "waveform", title: "Keep audio", detail: "Saves the recording in your Audio folder. When off, the audio is deleted after the transcript is saved.")
         }
     }

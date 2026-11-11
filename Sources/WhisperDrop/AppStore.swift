@@ -30,6 +30,8 @@ final class AppStore: ObservableObject {
     var canMoveSavedFiles: () -> Bool = { true }
     var audioBoostEnabled: () -> Bool = { true }
     var spokenLanguage: () -> String = { "auto" }
+    /// Settings, General, Transcribe right away. Off in tests and replays unless they set it.
+    var autoTranscribe: () -> Bool = { false }
     /// What happens to a CAF from an earlier version once its M4A is verified.
     var discardOriginal: @Sendable (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }
     /// The file model chosen in Settings, Models.
@@ -199,6 +201,12 @@ final class AppStore: ObservableObject {
         }
         if unsupported > 0 { error = "\(unsupported) item(s) could not be added. Choose readable audio or video files." }
         save()
+        startIfAutomatic()
+    }
+    /// Starts the queue when Transcribe right away is on and the model is downloaded; a download waits for Transcribe.
+    /// Items added while a run is busy join it when it ends.
+    func startIfAutomatic() {
+        if autoTranscribe(), !busy, downloaded.contains(model.id) { start() }
     }
     /// Inserts a finished note at the top of the library, names its folders after its title and selects it.
     func addNote(_ job: TranscriptionJob) {
@@ -257,6 +265,7 @@ final class AppStore: ObservableObject {
                 }
                 guard !added.isEmpty else { throw AppFailure("No new videos were found. They may already be queued, private or unavailable.") }
                 jobs.insert(contentsOf: added, at: 0); selection = added.first?.id; save()
+                startIfAutomatic()
             } catch is CancellationError {} catch { self.error = error.localizedDescription }
         }
     }
@@ -301,7 +310,12 @@ final class AppStore: ObservableObject {
         let ids = jobs.filter { $0.status == .queued }.map(\.id)
         busy = true; diagnostics = ""; progress = 0
         work = Task {
-            defer { busy = false; status = "Ready"; progress = 0; work = nil; fileHost?.unload(); save() }
+            var finished = false
+            defer {
+                busy = false; status = "Ready"; progress = 0; work = nil; fileHost?.unload(); save()
+                // Items added during the run. A stopped or failed run leaves them queued.
+                if finished { startIfAutomatic() }
+            }
             do {
                 guard chosenModel.supports(language: chosenLanguage) else {
                     throw AppFailure("\(chosenModel.name) does not transcribe \(LiveFormat.language(chosenLanguage)). Download a legacy Whisper model in Settings, Models.")
@@ -315,6 +329,7 @@ final class AppStore: ObservableObject {
                     catch is CancellationError { update(id) { $0.status = .cancelled }; throw CancellationError() }
                     catch { update(id) { $0.status = .failed; $0.error = error.localizedDescription }; save() }
                 }
+                finished = true
             } catch is CancellationError {} catch { self.error = error.localizedDescription }
         }
     }
@@ -515,11 +530,23 @@ final class AppStore: ObservableObject {
     }
     func export(_ ext: String) {
         guard let job = current else { return }
-        let text = ext == "txt" ? transcriptText(job) : TranscriptOutput.subtitles(job.segments, vtt: ext == "vtt")
+        let text: String
+        switch ext {
+        case "txt": text = transcriptText(job)
+        case "md": text = TranscriptOutput.markdown(job)
+        case "json":
+            do { text = try TranscriptOutput.json(job) }
+            catch { self.error = "Could not export JSON: \(error.localizedDescription)"; return }
+        default: text = TranscriptOutput.subtitles(job.segments, vtt: ext == "vtt")
+        }
         let panel = NSSavePanel()
         panel.directoryURL = outputFolder
         panel.nameFieldStringValue = SavedLibrary.fileName(for: job.title) + "." + ext
-        panel.allowedContentTypes = ext == "txt" ? [.plainText] : [UTType(filenameExtension: ext, conformingTo: .text) ?? .plainText]
+        panel.allowedContentTypes = switch ext {
+        case "txt": [.plainText]
+        case "json": [.json]
+        default: [UTType(filenameExtension: ext, conformingTo: .text) ?? .plainText]
+        }
         panel.begin { [weak self] result in
             guard result == .OK, let url = panel.url else { return }
             do { try text.write(to: url, atomically: true, encoding: .utf8) }

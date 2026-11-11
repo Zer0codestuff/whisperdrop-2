@@ -109,6 +109,8 @@ final class AppSettings: ObservableObject {
     @Published var noteVocabulary: String { didSet { defaults.set(noteVocabulary, forKey: "noteVocabulary") } }
     @Published var keepNoteAudio: Bool { didSet { defaults.set(keepNoteAudio, forKey: "keepNoteAudio") } }
     @Published var automaticAudioBoost: Bool { didSet { defaults.set(automaticAudioBoost, forKey: "automaticAudioBoost") } }
+    /// Added files and YouTube links start transcribing without pressing Transcribe.
+    @Published var autoTranscribe: Bool { didSet { defaults.set(autoTranscribe, forKey: "autoTranscribe") } }
     @Published var showInDock: Bool { didSet { defaults.set(showInDock, forKey: "showInDock") } }
     @Published var dictationLiveText: DictationLiveText { didSet { defaults.set(dictationLiveText.rawValue, forKey: "dictationLiveText") } }
     /// Unconfirmed words after the transcript while a note records.
@@ -145,6 +147,7 @@ final class AppSettings: ObservableObject {
         noteVocabulary = defaults.string(forKey: "noteVocabulary") ?? ""
         keepNoteAudio = bool("keepNoteAudio", true)
         automaticAudioBoost = bool("automaticAudioBoost", true)
+        autoTranscribe = bool("autoTranscribe", true)
         showInDock = bool("showInDock", true)
         let livePreview = bool("livePreview", true)
         dictationLiveText = DictationLiveText(rawValue: defaults.string(forKey: "dictationLiveText") ?? "") ?? (livePreview ? .inField : .off)

@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(NaturalLanguage)
 import NaturalLanguage
+#endif
 
 /// Editable local writing actions. IDs remain stable when a user changes the title or instruction.
 public struct TextAction: Codable, Identifiable, Equatable, Sendable {
@@ -65,10 +67,15 @@ public struct TextToolRequest: Sendable {
     }
 
     public var language: String {
+        #if canImport(NaturalLanguage)
         guard let detected = NLLanguageRecognizer.dominantLanguage(for: text), detected != .undetermined else {
             return "the language of the supplied text"
         }
         return Locale(identifier: "en").localizedString(forLanguageCode: detected.rawValue) ?? "the language of the supplied text"
+        #else
+        // Only the Linux check build of the core lacks NaturalLanguage. The Mac app always detects the language.
+        return "the language of the supplied text"
+        #endif
     }
 
     public var userPrompt: String {

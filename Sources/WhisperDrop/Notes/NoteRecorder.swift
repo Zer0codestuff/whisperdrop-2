@@ -144,6 +144,13 @@ final class NoteRecorder: ObservableObject {
 
     func cancelStart() { pendingStart = nil; showLanguageReminder = false }
 
+    /// Starts from the New note sheet, which shows the language, so the first-use reminder is not needed.
+    func startChosen(_ sources: NoteSources) {
+        guard state == .idle else { return }
+        defaults.set(true, forKey: "noteLanguageReminderSeen")
+        start(sources)
+    }
+
     func dismissFailure() {
         guard case .failed = state else { return }
         resetFields()

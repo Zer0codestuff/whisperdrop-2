@@ -1,0 +1,32 @@
+name: Linux checks
+on:
+  push:
+    paths:
+      - 'linux/**'
+      - '.github/workflows/linux.yml'
+  pull_request:
+    paths:
+      - 'linux/**'
+      - '.github/workflows/linux.yml'
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: linux
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system packages
+        run: sudo apt-get update && sudo apt-get install -y python3-gi python3-venv gir1.2-gtk-4.0 gir1.2-adw-1 ffmpeg
+      - name: Python environment
+        run: |
+          python3 -m venv --system-site-packages .venv
+          .venv/bin/pip install numpy
+      - name: Byte-compile every module
+        run: .venv/bin/python -m compileall -q whisperdrop
+      - name: Tests
+        run: .venv/bin/python -m unittest discover -s tests -v
+      - name: Shell scripts
+        run: bash -n install.sh && bash -n uninstall.sh && bash -n scripts/build-whisper.sh && sh -n bin/whisperdrop && sh -n bin/whisperdrop-ctl

@@ -10,6 +10,8 @@ Turn recordings, videos and meetings into text, right on your Mac. Record a lect
 
 [Use WhisperDrop Web](https://whisperdrop-web-production.up.railway.app/) · Experimental · Hardware WebGPU required
 
+[WhisperDrop for Linux](linux/README.md) · GTK 4 · Parakeet v3 and Whisper on your own computer · Install from source
+
 ## Features
 
 - Transcribe audio and video files. Drag them into the app or choose them with the file picker.
@@ -19,8 +21,8 @@ Turn recordings, videos and meetings into text, right on your Mac. Record a lect
 - Dictate into other apps by holding a shortcut key. The words appear where your cursor is.
 - Revise selected text with a shortcut using Draft's local writing tools. Review grammar, tone and wording suggestions, or summarize and organize transcripts as separate saved versions.
 - Choose the spoken language once for files, dictation and notes, or let the app detect it. Add subject terms and names in Settings to help recognition.
-- Read transcripts with timestamps, copy the text, or export plain text and SRT or VTT subtitles.
-- Queue several recordings, cancel processing, retry failures, and return to saved transcripts later.
+- Read transcripts with timestamps, find words with Command-F, copy the text, or export plain text, Markdown, SRT or VTT subtitles, or JSON with word timings.
+- Added recordings start transcribing right away (you can turn this off in Settings, General). Cancel processing, retry failures, and search your library by title or by what was said.
 - Choose one model for everything in **Settings > Models**. Parakeet v3 is the default: it covers 25 European languages and is fast enough for dictation to write words into the text field while you speak. Whisper models remain available as legacy models for other languages and vocabulary hints; when your language needs one, an installed Whisper model is used automatically. Advanced settings can give dictation, notes or files their own model.
 - Process speech locally. After downloading a model, you can transcribe local files, record notes and dictate offline.
 
@@ -53,7 +55,7 @@ Version 2.6.1 requires a manual download and replacement. The signing key for th
 
 ## Notes and dictation
 
-Notes use the app language. To record one note in another language, choose it in **Note language** beside **New note**; the next note uses it once. Use **Keep audio** if you also want to save the recording. It is saved as a compact M4A file named after the note, about 22 MB per hour. You can find kept audio later using the note's audio button.
+Notes use the app language. **New note** asks what to record (microphone, system audio or both), the language of that note, an optional name, and whether to **Keep audio**. A language chosen there applies to that note only. Kept audio is saved as a compact M4A file named after the note, about 22 MB per hour. You can find kept audio later using the note's audio button.
 
 To rename a note, click its title, type the new name and press Return. This works while the note is recording and after it is saved. You can also right-click a saved note in the library and choose **Rename…**.
 

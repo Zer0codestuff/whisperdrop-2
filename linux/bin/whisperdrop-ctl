@@ -1,0 +1,32 @@
+#!/bin/sh
+# Remote control for a running WhisperDrop, for keyboard shortcuts.
+#   whisperdrop-ctl dictate press|release|toggle|cancel
+#   whisperdrop-ctl note toggle
+#   whisperdrop-ctl show
+app=io.github.zer0codestuff.WhisperDrop
+path=/io/github/zer0codestuff/WhisperDrop
+case "$1 $2" in
+  "dictate press") action=dictate-press ;;
+  "dictate release") action=dictate-release ;;
+  "dictate toggle") action=dictate-toggle ;;
+  "dictate cancel") action=dictate-cancel ;;
+  "note toggle") action=note-toggle ;;
+  "show "*) action=show ;;
+  *) echo "usage: whisperdrop-ctl dictate press|release|toggle|cancel | note toggle | show" >&2; exit 2 ;;
+esac
+call() {
+  gdbus call --session --dest "$app" --object-path "$path" --method org.gtk.Actions.Activate "$action" '[]' '{}' >/dev/null 2>&1
+}
+call && exit 0
+# Not running: start it hidden, then retry. A release without a running app does nothing.
+[ "$action" = dictate-release ] && exit 0
+here=$(dirname "$(readlink -f "$0")")
+launcher=$(command -v whisperdrop || echo "$here/whisperdrop")
+if [ "$action" = show ]; then "$launcher" >/dev/null 2>&1 & exit 0; fi
+"$launcher" --background >/dev/null 2>&1 &
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  sleep 0.25
+  call && exit 0
+done
+echo "WhisperDrop did not start." >&2
+exit 1

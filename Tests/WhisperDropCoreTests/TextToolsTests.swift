@@ -14,6 +14,9 @@ final class TextToolsTests: XCTestCase {
     }
 
     func testEditedActionInstructionsReachThePromptAndNotesKeepTheirHeadings() throws {
+        #if !canImport(NaturalLanguage)
+        throw XCTSkip("Language detection needs Apple's NaturalLanguage framework.")
+        #endif
         var action = try XCTUnwrap(TextAction.action(id: "organize"))
         action.instruction = "Use headings and keep mathematical formulas."
         let request = TextToolRequest(text: "Equazione e prossimo incontro", action: action, instruction: "Keep it in Italian", style: "Use direct sentences")

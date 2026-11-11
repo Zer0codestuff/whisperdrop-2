@@ -10,3 +10,8 @@ dist/
 web/node_modules/
 web/dist/
 web/public/.verify-*
+
+# Linux app
+__pycache__/
+*.pyc
+linux/.venv/

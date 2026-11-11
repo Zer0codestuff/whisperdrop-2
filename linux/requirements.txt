@@ -1,0 +1,3 @@
+# Installed into WhisperDrop's own virtual environment by install.sh. PyGObject comes from the system.
+numpy==2.5.4
+sherpa-onnx==2.0.1

@@ -1,0 +1,23 @@
+[Desktop Entry]
+Type=Application
+Name=WhisperDrop
+GenericName=Transcription and Dictation
+Comment=Transcribe recordings, record notes and dictate, on this computer
+Exec=whisperdrop %F
+Icon=io.github.zer0codestuff.WhisperDrop
+Terminal=false
+Categories=AudioVideo;Audio;Utility;Accessibility;
+Keywords=transcribe;speech;dictation;voice;whisper;parakeet;notes;subtitles;
+MimeType=audio/mpeg;audio/x-wav;audio/wav;audio/mp4;audio/x-m4a;audio/ogg;audio/flac;audio/webm;audio/aac;video/mp4;video/webm;video/x-matroska;video/quicktime;
+StartupNotify=true
+StartupWMClass=io.github.zer0codestuff.WhisperDrop
+DBusActivatable=false
+Actions=new-note;dictate;
+
+[Desktop Action new-note]
+Name=New Note
+Exec=whisperdrop-ctl note toggle
+
+[Desktop Action dictate]
+Name=Start or Stop Dictation
+Exec=whisperdrop-ctl dictate toggle

@@ -21,6 +21,11 @@ struct ContentView: View {
     @State private var renamingNote: TranscriptionJob?
     @State private var editingTitle = false
     @State private var displayedRevision: UUID?
+    @State private var libraryQuery = ""
+    @State private var finding = false
+    @State private var findQuery = ""
+    @State private var findIndex = 0
+    @FocusState private var findFocused: Bool
     var body: some View {
         HStack(spacing: 0) {
             sidebar.frame(width: 262)
@@ -36,7 +41,7 @@ struct ContentView: View {
         .frame(minWidth: 860, minHeight: 580)
         .background(Color.black)
         .tint(Palette.green)
-        .onChange(of: store.selection) { displayedRevision = nil; editingTitle = false }
+        .onChange(of: store.selection) { displayedRevision = nil; editingTitle = false; findIndex = 0 }
         .onChange(of: recorder.state) {
             if LiveNote.isActive(recorder.state) { writing.showLibrary() }
             if case .failed(let message) = recorder.state {
@@ -79,7 +84,7 @@ struct ContentView: View {
             Button("Start recording") { recorder.confirmStart() }
             Button("Cancel", role: .cancel) { recorder.cancelStart() }
         } message: {
-            Text("Language for this note: \(NoteLanguage.label(settings.noteLanguage)). If the lesson or meeting is in another language, choose it next to New note. That choice applies to this note only.")
+            Text("Language for this note: \(NoteLanguage.label(settings.noteLanguage)). If the lesson or meeting is in another language, choose it under New note. That choice applies to this note only.")
         }
     }
     private var sidebar: some View {
@@ -101,35 +106,32 @@ struct ContentView: View {
                 Spacer()
                 Text("\(store.jobs.count)").font(.system(size: 12)).monospacedDigit()
             }.foregroundStyle(Palette.secondary).padding(.horizontal, 24).padding(.top, 30).padding(.bottom, 12)
+            if !store.jobs.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(Palette.secondary)
+                    TextField("Search titles and transcripts", text: $libraryQuery).textFieldStyle(.plain).font(.system(size: 12))
+                    if !libraryQuery.isEmpty {
+                        Button { libraryQuery = "" } label: { Image(systemName: "xmark.circle.fill") }
+                            .buttonStyle(.plain).foregroundStyle(Palette.secondary).accessibilityLabel("Clear search")
+                    }
+                }
+                .padding(.horizontal, 10).padding(.vertical, 7)
+                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Palette.line))
+                .padding(.horizontal, 20).padding(.bottom, 8)
+            }
             ScrollView {
-                LazyVStack(spacing: 5) {
-                    ForEach(store.jobs) { job in
-                        Button { writing.showLibrary(); store.selection = job.id } label: {
-                            HStack(alignment: .top, spacing: 10) {
-                                Image(systemName: sidebarSymbol(job)).font(.system(size: 15)).foregroundStyle(!writing.editorVisible && store.selection == job.id ? Palette.green : Palette.secondary).frame(width: 20).padding(.top, 2)
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text(job.title).font(.system(size: 13, weight: .medium)).lineLimit(2).multilineTextAlignment(.leading)
-                                    HStack(spacing: 5) {
-                                        if job.status == .completed { Image(systemName: "checkmark").foregroundStyle(Palette.green) }
-                                        Text(job.status.label)
-                                    }.font(.system(size: 11)).foregroundStyle(job.status == .failed ? Color.red : Palette.secondary)
-                                }
-                                Spacer(minLength: 0)
-                            }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                                .background(!writing.editorVisible && store.selection == job.id ? Palette.selected : Color.clear, in: RoundedRectangle(cornerRadius: 10))
-                                .contentShape(Rectangle())
-                        }.buttonStyle(.plain)
-                            .contextMenu {
-                                if job.resolvedKind == .note {
-                                    Button("Rename…") { renamingNote = job }.disabled(!store.canRenameNote(job))
-                                }
-                                if job.status == .failed || job.status == .cancelled { Button("Try again") { store.retry(job.id) } }
-                                Button("Remove from library", role: .destructive) { store.remove(job.id) }.disabled(job.status.isActive)
-                            }
+                LazyVStack(alignment: .leading, spacing: 5) {
+                    ForEach(LibrarySections.sections(filteredJobs)) { section in
+                        Text(section.title).font(.system(size: 10.5, weight: .medium)).foregroundStyle(Palette.secondary)
+                            .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 2)
+                        ForEach(section.jobs) { job in jobRow(job) }
                     }
                 }.padding(.horizontal, 12)
                 if store.jobs.isEmpty {
                     Text("Your recordings will appear here.").font(.system(size: 12)).foregroundStyle(Palette.secondary).padding(.horizontal, 24).padding(.top, 8).frame(maxWidth: .infinity, alignment: .leading)
+                } else if filteredJobs.isEmpty {
+                    Text("Nothing matches \u{201C}\(libraryQuery)\u{201D}.").font(.system(size: 12)).foregroundStyle(Palette.secondary).padding(.horizontal, 24).padding(.top, 8).frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             if store.importing {
@@ -161,6 +163,43 @@ struct ContentView: View {
             }.padding(24)
         }.background(Color(white: 0.035))
     }
+    private var filteredJobs: [TranscriptionJob] {
+        libraryQuery.isEmpty ? store.jobs : store.jobs.filter { TranscriptSearch.matches($0, libraryQuery) }
+    }
+    private func jobRow(_ job: TranscriptionJob) -> some View {
+        let selected = !writing.editorVisible && store.selection == job.id
+        return Button { writing.showLibrary(); store.selection = job.id } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: sidebarSymbol(job)).font(.system(size: 15)).foregroundStyle(selected ? Palette.green : Palette.secondary).frame(width: 20).padding(.top, 2)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(job.title).font(.system(size: 13, weight: .medium)).lineLimit(2).multilineTextAlignment(.leading)
+                    HStack(spacing: 5) {
+                        if job.status == .completed { Image(systemName: "checkmark").foregroundStyle(Palette.green) }
+                        Text(rowDetail(job))
+                    }.font(.system(size: 11)).foregroundStyle(job.status == .failed ? Color.red : Palette.secondary)
+                }
+                Spacer(minLength: 0)
+            }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                .background(selected ? Palette.selected : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain)
+            .contextMenu {
+                if job.resolvedKind == .note {
+                    Button("Rename…") { renamingNote = job }.disabled(!store.canRenameNote(job))
+                }
+                if job.status == .failed || job.status == .cancelled { Button("Try again") { store.retry(job.id) } }
+                Button("Remove from library", role: .destructive) { store.remove(job.id) }.disabled(job.status.isActive)
+            }
+    }
+    /// "Completed · 3 min 7 s", or the status alone.
+    private func rowDetail(_ job: TranscriptionJob) -> String {
+        guard job.status == .completed, let duration = job.duration, duration > 0 else { return job.status.label }
+        return "\(job.status.label) · \(TranscriptOutput.durationLabel(duration))"
+    }
+    /// The bar with model, language and Transcribe appears only when it has something to do.
+    private var showsControls: Bool {
+        store.current == nil || store.busy || store.queuedCount > 0 || store.downloadingModel != nil
+    }
     private var libraryColumn: some View {
         VStack(spacing: 0) {
             header
@@ -169,7 +208,9 @@ struct ContentView: View {
                 Color.black
                 if let job = store.current { detail(job) } else { emptyState }
             }
-            controls.padding(.horizontal, 28).padding(.bottom, 24).padding(.top, 12)
+            if showsControls {
+                controls.padding(.horizontal, 28).padding(.bottom, 24).padding(.top, 12)
+            }
         }
     }
     private func sidebarSymbol(_ job: TranscriptionJob) -> String {
@@ -210,11 +251,16 @@ struct ContentView: View {
                         Image(systemName: "waveform")
                     }.buttonStyle(.plain).help("Show saved audio in Finder").accessibilityLabel("Show saved audio")
                 }
+                Button { finding.toggle() } label: { Image(systemName: "magnifyingglass") }.buttonStyle(.plain)
+                    .keyboardShortcut("f").help("Find in transcript (Command-F)").accessibilityLabel("Find in transcript")
                 Button(action: store.copyTranscript) { Image(systemName: "doc.on.doc") }.buttonStyle(.plain).help("Copy transcript").accessibilityLabel("Copy transcript")
                 Menu {
                     Button("Plain text (.txt)") { store.export("txt") }
+                    Button("Markdown (.md)") { store.export("md") }
                     Button("SubRip subtitles (.srt)") { store.export("srt") }
                     Button("WebVTT subtitles (.vtt)") { store.export("vtt") }
+                    Divider()
+                    Button("JSON with word timings (.json)") { store.export("json") }
                 } label: { Label("Export", systemImage: "square.and.arrow.up") }.menuStyle(.borderlessButton).fixedSize()
             }
         }.padding(.horizontal, 32).frame(height: 96)
@@ -233,61 +279,73 @@ struct ContentView: View {
     }
     @ViewBuilder private func detail(_ job: TranscriptionJob) -> some View {
         if job.status == .completed {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    HStack {
-                        if let versions = job.textRevisions, !versions.isEmpty {
-                            Picker("Text version", selection: $displayedRevision) {
-                                Text("Transcript").tag(nil as UUID?)
-                                ForEach(versions) { version in Text(version.title).tag(version.id as UUID?) }
-                            }.labelsHidden().frame(maxWidth: 260, alignment: .leading)
-                        } else {
-                            Text("Transcript").font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.secondary)
-                        }
-                        Spacer()
-                        if writing.processingNotes.contains(job.id) {
-                            ProgressView().controlSize(.small)
-                            Text("Summarizing…").font(.system(size: 11)).foregroundStyle(Palette.secondary)
-                        } else {
-                            Text(job.modelName ?? "Whisper").font(.system(size: 11)).foregroundStyle(Palette.secondary)
-                        }
-                    }.padding(.bottom, 8)
-                    if let revision = job.textRevisions?.first(where: { $0.id == displayedRevision }) {
-                        VStack(alignment: .leading, spacing: 16) {
+            let rows = TranscriptOutput.paragraphs(job.segments, eachSentence: job.sentenceParagraphs == true)
+            let hits = finding ? rows.filter { !TranscriptSearch.ranges(of: findQuery, in: $0.text).isEmpty }.map(\.id) : []
+            VStack(spacing: 0) {
+                if finding && displayedRevision == nil { findBar(hits) }
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 24) {
                             HStack {
-                                Text("\(revision.modelName) · \(revision.created.formatted(date: .abbreviated, time: .shortened))")
-                                    .font(.system(size: 11)).foregroundStyle(Palette.secondary)
+                                if let versions = job.textRevisions, !versions.isEmpty {
+                                    Picker("Text version", selection: $displayedRevision) {
+                                        Text("Transcript").tag(nil as UUID?)
+                                        ForEach(versions) { version in Text(version.title).tag(version.id as UUID?) }
+                                    }.labelsHidden().frame(maxWidth: 260, alignment: .leading)
+                                } else {
+                                    Text("Transcript").font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.secondary)
+                                }
                                 Spacer()
-                                Button("Copy version") {
-                                    NSPasteboard.general.prepareForNewContents(with: .currentHostOnly)
-                                    NSPasteboard.general.setString(revision.text, forType: .string)
-                                }.buttonStyle(LiveQuietButton())
+                                if writing.processingNotes.contains(job.id) {
+                                    ProgressView().controlSize(.small)
+                                    Text("Summarizing…").font(.system(size: 11)).foregroundStyle(Palette.secondary)
+                                } else {
+                                    Text(job.modelName ?? "Whisper").font(.system(size: 11)).foregroundStyle(Palette.secondary)
+                                }
+                            }.padding(.bottom, 8)
+                            if let revision = job.textRevisions?.first(where: { $0.id == displayedRevision }) {
+                                VStack(alignment: .leading, spacing: 16) {
+                                    HStack {
+                                        Text("\(revision.modelName) · \(revision.created.formatted(date: .abbreviated, time: .shortened))")
+                                            .font(.system(size: 11)).foregroundStyle(Palette.secondary)
+                                        Spacer()
+                                        Button("Copy version") {
+                                            NSPasteboard.general.prepareForNewContents(with: .currentHostOnly)
+                                            NSPasteboard.general.setString(revision.text, forType: .string)
+                                        }.buttonStyle(LiveQuietButton())
+                                    }
+                                    Text(revision.text).font(.system(size: 16)).lineSpacing(7).textSelection(.enabled)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            } else {
+                            if job.segments.isEmpty {
+                                Text("No speech was detected in this recording.").foregroundStyle(Palette.secondary)
                             }
-                            Text(revision.text).font(.system(size: 16)).lineSpacing(7).textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    } else {
-                    if job.segments.isEmpty {
-                        Text("No speech was detected in this recording.").foregroundStyle(Palette.secondary)
-                    }
-                    if let warning = job.error, warning != NoteCopy.noSpeech {
-                        let prefix = NoteCopy.noSpeech + "\n"
-                        Text(warning.hasPrefix(prefix) ? String(warning.dropFirst(prefix.count)) : warning)
-                            .font(.system(size: 12)).foregroundStyle(.orange)
-                    }
-                    ForEach(TranscriptOutput.paragraphs(job.segments, eachSentence: job.sentenceParagraphs == true)) { segment in
-                        HStack(alignment: .firstTextBaseline, spacing: 22) {
-                            Text(segment.timeLabel).font(.system(size: 11)).monospacedDigit().foregroundStyle(Palette.secondary).frame(width: 44, alignment: .leading)
-                            if let speaker = segment.speaker {
-                                Text(speaker.label).font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(speaker == .you ? Palette.green : .white)
-                                    .frame(width: 52, alignment: .leading)
+                            if let warning = job.error, warning != NoteCopy.noSpeech {
+                                let prefix = NoteCopy.noSpeech + "\n"
+                                Text(warning.hasPrefix(prefix) ? String(warning.dropFirst(prefix.count)) : warning)
+                                    .font(.system(size: 12)).foregroundStyle(.orange)
                             }
-                            Text(segment.text).font(.system(size: 16)).lineSpacing(7).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                        }
+                            ForEach(rows) { segment in
+                                HStack(alignment: .firstTextBaseline, spacing: 22) {
+                                    Text(segment.timeLabel).font(.system(size: 11)).monospacedDigit().foregroundStyle(Palette.secondary).frame(width: 44, alignment: .leading)
+                                    if let speaker = segment.speaker {
+                                        Text(speaker.label).font(.system(size: 11, weight: .medium))
+                                            .foregroundStyle(speaker == .you ? Palette.green : .white)
+                                            .frame(width: 52, alignment: .leading)
+                                    }
+                                    Text(highlighted(segment.text)).font(.system(size: 16)).lineSpacing(7).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                                }.id(segment.id)
+                            }
+                            }
+                        }.padding(36).frame(maxWidth: 900, alignment: .leading).frame(maxWidth: .infinity)
                     }
-                    }
-                }.padding(36).frame(maxWidth: 900, alignment: .leading).frame(maxWidth: .infinity)
+                    .onChange(of: findQuery) { findIndex = 0; reveal(hits, proxy) }
+                    .onChange(of: findIndex) { reveal(hits, proxy) }
+                }
+            }
+            .onChange(of: finding) {
+                if finding { DispatchQueue.main.async { findFocused = true } } else { findQuery = "" }
             }
         } else {
             VStack(spacing: 18) {
@@ -305,6 +363,41 @@ struct ContentView: View {
                 }
             }.padding(32).frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+    private func findBar(_ hits: [Int]) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(Palette.secondary)
+                TextField("Find in transcript", text: $findQuery).textFieldStyle(.plain).font(.system(size: 13))
+                    .focused($findFocused)
+                    .onSubmit { if !hits.isEmpty { findIndex = (findIndex + 1) % hits.count } }
+                if !findQuery.trimmingCharacters(in: .whitespaces).isEmpty {
+                    Text(hits.isEmpty ? "No matches" : "\(min(findIndex, hits.count - 1) + 1) of \(hits.count)")
+                        .font(.system(size: 11)).monospacedDigit().foregroundStyle(Palette.secondary)
+                }
+                Button { findIndex = (findIndex - 1 + hits.count) % max(hits.count, 1) } label: { Image(systemName: "chevron.up") }
+                    .buttonStyle(.plain).disabled(hits.count < 2).accessibilityLabel("Previous match")
+                Button { findIndex = (findIndex + 1) % max(hits.count, 1) } label: { Image(systemName: "chevron.down") }
+                    .buttonStyle(.plain).disabled(hits.count < 2).accessibilityLabel("Next match")
+                Button("Done") { finding = false }.buttonStyle(.plain).foregroundStyle(Palette.green)
+                    .keyboardShortcut(.cancelAction)
+            }.padding(.horizontal, 36).padding(.vertical, 10)
+            Rectangle().fill(Palette.line).frame(height: 1)
+        }
+    }
+    private func reveal(_ hits: [Int], _ proxy: ScrollViewProxy) {
+        guard !hits.isEmpty else { return }
+        withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(hits[min(findIndex, hits.count - 1)], anchor: .center) }
+    }
+    /// Matches of the find field in green, ignoring case and accents.
+    private func highlighted(_ text: String) -> AttributedString {
+        var value = AttributedString(text)
+        guard finding else { return value }
+        let mark: Color = Palette.green.opacity(0.35)
+        for range in TranscriptSearch.ranges(of: findQuery, in: text) {
+            if let found = Range(range, in: value) { value[found].backgroundColor = mark }
+        }
+        return value
     }
     private var controls: some View {
         VStack(spacing: 12) {

@@ -203,48 +203,110 @@ private struct LiveBottomEdge: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
-/// Sidebar control to start a new note with a chosen source. Reads NoteRecorder and AppSettings from the environment.
+/// One button in the sidebar. The sheet asks what to record, the language of this note and whether to keep the audio.
 struct NewNoteButton: View {
     @EnvironmentObject private var recorder: NoteRecorder
     @EnvironmentObject private var settings: AppSettings
+    @State private var choosing = false
     var body: some View {
         let active = LiveNote.isActive(recorder.state)
-        VStack(alignment: .leading, spacing: 9) {
-            HStack {
-                Text("Note language").foregroundStyle(LivePalette.secondary)
-                Spacer(minLength: 0)
-                Picker("Note language", selection: nextNoteLanguage) {
-                    Text(LiveFormat.language(settings.spokenLanguage) + " (app)").tag("")
-                    Divider()
-                    ForEach(AppStore.languages, id: \.0) { Text($0.1).tag($0.0) }
-                }.labelsHidden().frame(maxWidth: 136).disabled(active)
-                .help("Another language for the next note only. The app language is set in Settings, General.")
-            }.font(.system(size: 11))
-            Menu {
-                ForEach(NoteSources.allCases) { source in
-                    Button { LiveNote.start(recorder, source) } label: {
-                        Label(source.label + (source == settings.noteSources ? " (default)" : ""), systemImage: LiveNote.symbol(source))
-                    }
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: active ? "record.circle.fill" : "record.circle").foregroundStyle(active ? LivePalette.green : .white)
-                    Text(recorder.state == .paused ? "Paused" : active ? "Recording" : "New note")
-                }.frame(maxWidth: .infinity)
+        Button { choosing = true } label: {
+            HStack(spacing: 6) {
+                Image(systemName: active ? "record.circle.fill" : "record.circle").foregroundStyle(active ? LivePalette.green : .white)
+                Text(recorder.state == .paused ? "Paused" : active ? "Recording" : "New note")
             }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden)
+            .frame(maxWidth: .infinity)
             .font(.system(size: 12, weight: .medium))
             .padding(.horizontal, 12).padding(.vertical, 10)
             .background(Color.white.opacity(0.065), in: RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(LivePalette.line))
-            .disabled(active)
-            .help(active ? "A note is recording" : "Record a call, lecture or meeting")
-            Toggle("Keep audio", isOn: $settings.keepNoteAudio)
-                .toggleStyle(.checkbox).font(.system(size: 11)).foregroundStyle(LivePalette.secondary)
-                .disabled(active)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut("n", modifiers: [.command, .shift])
+        .disabled(active)
+        .help(active ? "A note is recording" : "Record a call, lecture or meeting (Shift-Command-N)")
+        .sheet(isPresented: $choosing) {
+            NewNoteSheet().environmentObject(recorder).environmentObject(settings)
         }
     }
-    private var nextNoteLanguage: Binding<String> {
-        Binding(get: { settings.nextNoteLanguage ?? "" }, set: { settings.nextNoteLanguage = $0.isEmpty ? nil : $0 })
+}
+
+private struct NewNoteSheet: View {
+    @EnvironmentObject private var recorder: NoteRecorder
+    @EnvironmentObject private var settings: AppSettings
+    @Environment(\.dismiss) private var dismiss
+    @State private var sources: NoteSources = .both
+    /// Empty follows the app language.
+    @State private var language = ""
+    @State private var name = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("New note").font(.system(size: 22, weight: .semibold))
+                Text("Text appears while the note records. Pause stops recording without closing the note.")
+                    .font(.system(size: 12)).foregroundStyle(LivePalette.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Record").font(.system(size: 11, weight: .medium)).foregroundStyle(LivePalette.secondary)
+                Picker("Record", selection: $sources) {
+                    ForEach(NoteSources.allCases) { Text(LiveNote.shortLabel($0)).tag($0) }
+                }.pickerStyle(.segmented).labelsHidden()
+                Text(explanation).font(.system(size: 12)).foregroundStyle(LivePalette.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(spacing: 14) {
+                HStack {
+                    Text("Language")
+                    Spacer(minLength: 12)
+                    Picker("Language", selection: $language) {
+                        Text(LiveFormat.language(settings.spokenLanguage) + " (usual)").tag("")
+                        Divider()
+                        ForEach(AppStore.languages, id: \.0) { Text($0.1).tag($0.0) }
+                    }.labelsHidden().frame(width: 200)
+                }
+                HStack {
+                    Text("Name")
+                    Spacer(minLength: 12)
+                    TextField("Date and time", text: $name).textFieldStyle(.roundedBorder).frame(width: 200)
+                }
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Keep audio")
+                        Text("Saved as M4A beside the transcript, about 22 MB per hour.")
+                            .font(.system(size: 11)).foregroundStyle(LivePalette.secondary)
+                    }
+                    Spacer(minLength: 12)
+                    Toggle("Keep audio", isOn: $settings.keepNoteAudio).toggleStyle(.switch).controlSize(.small).labelsHidden()
+                }
+            }.font(.system(size: 13))
+            Text("The language applies to this note only. The usual language is set in Settings, General.")
+                .font(.system(size: 11)).foregroundStyle(LivePalette.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Start recording", action: start).keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(28).frame(width: 470)
+        .onAppear {
+            sources = settings.noteSources
+            language = settings.nextNoteLanguage ?? ""
+        }
+    }
+    private var explanation: String {
+        switch sources {
+        case .microphone: "You, or a lecture in the room."
+        case .systemAudio: "Other apps on this Mac, such as an online lesson or a video."
+        case .both: "A call. Your voice is labeled You, the other side Others."
+        }
+    }
+    private func start() {
+        settings.noteSources = sources
+        settings.nextNoteLanguage = language.isEmpty ? nil : language
+        let title = name.components(separatedBy: .newlines).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        recorder.title = title.isEmpty ? LiveFormat.noteTitle() : title
+        dismiss()
+        recorder.startChosen(sources)
     }
 }

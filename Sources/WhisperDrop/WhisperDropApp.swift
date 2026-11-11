@@ -58,6 +58,7 @@ struct WhisperDropApp: App {
         store.canMoveSavedFiles = { [weak recorder] in recorder.map { !LiveNote.isActive($0.state) } ?? true }
         store.audioBoostEnabled = { [weak settings] in settings?.automaticAudioBoost ?? true }
         store.spokenLanguage = { [weak settings] in settings?.spokenLanguage ?? "auto" }
+        store.autoTranscribe = { [weak settings] in settings?.autoTranscribe ?? true }
         store.fileModel = { [weak settings] in settings?.model(for: .files) ?? TranscriptionModel.catalog[0] }
         recorder.canStartRecording = { [weak store] in store?.canRecordNotes ?? false }
         recorder.modelInstalled = { [weak store] model in store?.downloaded.contains(model.id) ?? false }

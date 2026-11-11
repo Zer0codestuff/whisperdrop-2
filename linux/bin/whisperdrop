@@ -1,0 +1,23 @@
+#!/bin/sh
+# WhisperDrop launcher. Uses the installer's virtual environment when present, else the system Python.
+here=$(dirname "$(readlink -f "$0")")
+root=$(dirname "$here")
+# An installed copy lives in <data>/whisperdrop/app, next to its venv and runtime folders.
+if [ -z "$WHISPERDROP_VENV" ] && [ -x "$root/../venv/bin/python" ]; then
+  WHISPERDROP_VENV="$root/../venv"
+fi
+if [ -z "$WHISPERDROP_RUNTIME" ] && [ -d "$root/../runtime" ]; then
+  export WHISPERDROP_RUNTIME="$root/../runtime"
+fi
+venv="${WHISPERDROP_VENV:-${XDG_DATA_HOME:-$HOME/.local/share}/whisperdrop/venv}"
+python="$venv/bin/python"
+[ -x "$python" ] || python=python3
+# The dictation overlay needs gtk4-layer-shell loaded before libwayland.
+for lib in /usr/lib/libgtk4-layer-shell.so /usr/lib64/libgtk4-layer-shell.so /usr/lib/x86_64-linux-gnu/libgtk4-layer-shell.so; do
+  if [ -e "$lib" ] && [ -n "$WAYLAND_DISPLAY" ]; then
+    export LD_PRELOAD="$lib${LD_PRELOAD:+:$LD_PRELOAD}"
+    break
+  fi
+done
+export PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}"
+exec "$python" -m whisperdrop "$@"
