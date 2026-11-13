@@ -1,38 +1,56 @@
 import AVFoundation
-import AudioCaptureBridge
+import CoreAudio
 import XCTest
 @testable import WhisperDrop
 
 final class CaptureTests: XCTestCase {
-    func testMismatchedHardwareFormatReturnsAnError() throws {
-        let engine = AVAudioEngine()
-        let input = engine.inputNode
-        let hardware = input.inputFormat(forBus: 0)
-        try XCTSkipUnless(hardware.sampleRate > 0 && hardware.channelCount > 0, "No audio input hardware")
-        let wrongRate: Double = hardware.sampleRate == 16_000 ? 48_000 : 16_000
-        let stale = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: wrongRate, channels: hardware.channelCount))
-        // This is the failure recorded in the user's crash log. No engine starts or audio is recorded.
-        XCTAssertThrowsError(try WDAudioCaptureBridge.installTap(on: input, bufferSize: AVAudioFrameCount(wrongRate * 0.1), format: stale, block: { _, _ in })) {
-            XCTAssertFalse($0.localizedDescription.isEmpty)
+    /// Stereo packets of an odd size must come out as 100 ms mono chunks of the first channel, in order, with the tail on flush.
+    func testInputChunkerKeepsTheFirstChannelInFixedChunks() throws {
+        var source = AudioStreamBasicDescription(
+            mSampleRate: 48_000, mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
+            mBytesPerPacket: 8, mFramesPerPacket: 1, mBytesPerFrame: 8, mChannelsPerFrame: 2, mBitsPerChannel: 32, mReserved: 0
+        )
+        let layout = try XCTUnwrap(InputChunker.Layout(source: source))
+        XCTAssertEqual(layout.chunkFrames, 4_800)
+        XCTAssertEqual(layout.stride, 2)
+        source.mBitsPerChannel = 16
+        XCTAssertNil(InputChunker.Layout(source: source))
+
+        let lock = NSLock()
+        var chunks: [[Float]] = []
+        let queue = PCMSlotQueue(payloadCapacity: layout.chunkFrames * 4, label: "test.chunker") { packet in
+            XCTAssertEqual(packet.format.mSampleRate, 48_000)
+            XCTAssertEqual(packet.format.mChannelsPerFrame, 1)
+            let floats = packet.payload.assumingMemoryBound(to: Float.self)
+            lock.lock(); chunks.append(Array(UnsafeBufferPointer(start: floats, count: packet.frames))); lock.unlock()
         }
+        queue.start()
+        let chunker = InputChunker(layout: layout, queue: queue)
+        // 20 packets of 512 frames: 10,240 frames, two full chunks and a 640-frame tail.
+        var frame = 0
+        for _ in 0..<20 {
+            var packet = [Float](repeating: 0, count: 512 * 2)
+            for index in 0..<512 {
+                packet[index * 2] = Float(frame)
+                packet[index * 2 + 1] = -1
+                frame += 1
+            }
+            packet.withUnsafeMutableBytes { raw in
+                var list = AudioBufferList(mNumberBuffers: 1, mBuffers: AudioBuffer(
+                    mNumberChannels: 2, mDataByteSize: UInt32(raw.count), mData: raw.baseAddress
+                ))
+                chunker.append(&list)
+            }
+        }
+        chunker.flush()
+        queue.stop()
+        XCTAssertEqual(chunks.map(\.count), [4_800, 4_800, 640])
+        XCTAssertEqual(chunks.flatMap { $0 }, (0..<10_240).map(Float.init))
+        XCTAssertEqual(queue.droppedPacketCount, 0)
     }
 
-    func testTapFailureIsRecoverableAndTheNodeCanBeUsedAgain() throws {
-        let engine = AVAudioEngine()
-        let node = AVAudioMixerNode()
-        engine.attach(node)
-        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
-        try WDAudioCaptureBridge.installTap(on: node, bufferSize: 4_800, format: format, block: { _, _ in })
-        defer { node.removeTap(onBus: 0) }
-        // A second tap raises an NSException on older systems. It must become a Swift error.
-        XCTAssertThrowsError(try WDAudioCaptureBridge.installTap(on: node, bufferSize: 4_800, format: format, block: { _, _ in })) {
-            XCTAssertFalse($0.localizedDescription.isEmpty)
-        }
-        node.removeTap(onBus: 0)
-        try WDAudioCaptureBridge.installTap(on: node, bufferSize: 4_800, format: format, block: { _, _ in })
-    }
-
-    /// Opt-in, discards all microphone samples. Verifies the actual default-device route and repeated starts.
+    /// Opt-in, discards all microphone samples. Verifies the actual capture route and repeated starts.
     func testMicrophoneStartsRepeatedlyWithCurrentHardware() throws {
         guard ProcessInfo.processInfo.environment["WHISPERDROP_VERIFY_MICROPHONE"] == "1" else {
             throw XCTSkip("Set WHISPERDROP_VERIFY_MICROPHONE=1 to verify the local microphone")
@@ -49,6 +67,69 @@ final class CaptureTests: XCTestCase {
             XCTAssertEqual(delivered.wait(timeout: .now() + 5), .success)
             capture.stop()
         }
+    }
+
+    /// Opt-in, needs a connected Bluetooth headset that is the default input, and a built-in microphone.
+    /// The headset must keep its playback sample rate while a capture object exists, runs and stops.
+    func testBluetoothHeadsetKeepsItsPlaybackFormatAroundCapture() throws {
+        guard ProcessInfo.processInfo.environment["WHISPERDROP_VERIFY_MICROPHONE"] == "1" else {
+            throw XCTSkip("Set WHISPERDROP_VERIFY_MICROPHONE=1 to verify the local microphone")
+        }
+        try XCTSkipUnless(MicCapture.isAuthorized, "Microphone access is not granted to the test runner")
+        let defaultInput = try XCTUnwrap(AudioInputDevices.defaultInput())
+        try XCTSkipUnless(AudioInputDevices.isBluetooth(defaultInput), "The default input is not a Bluetooth headset")
+        let builtIn = try XCTUnwrap(AudioInputDevices.builtInInput(), "No built-in microphone")
+        XCTAssertEqual(AudioInputDevices.preferredInput(), builtIn)
+        let headset = try XCTUnwrap(bluetoothOutput(), "No Bluetooth output device")
+        let playbackRate = nominalSampleRate(headset)
+        XCTAssertGreaterThan(playbackRate, 16_000, "The headset is already in its speaking mode")
+
+        let capture = MicCapture()
+        defer { capture.stop() }
+        Thread.sleep(forTimeInterval: 1.5)
+        XCTAssertEqual(nominalSampleRate(headset), playbackRate, "idle capture object")
+        for _ in 0..<2 {
+            let delivered = DispatchSemaphore(value: 0)
+            capture.onSamples = { samples in
+                if !samples.isEmpty { delivered.signal() }
+            }
+            try capture.start()
+            XCTAssertEqual(delivered.wait(timeout: .now() + 5), .success)
+            Thread.sleep(forTimeInterval: 1.5)
+            XCTAssertEqual(nominalSampleRate(headset), playbackRate, "while capturing")
+            capture.stop()
+            Thread.sleep(forTimeInterval: 1)
+            XCTAssertEqual(nominalSampleRate(headset), playbackRate, "after stopping")
+        }
+    }
+
+    private func bluetoothOutput() -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain
+        )
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(system, &address, 0, nil, &size) == noErr else { return nil }
+        var devices = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(system, &address, 0, nil, &size, &devices) == noErr else { return nil }
+        return devices.first { device in
+            var streams = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyStreams, mScope: kAudioObjectPropertyScopeOutput, mElement: kAudioObjectPropertyElementMain
+            )
+            var streamsSize: UInt32 = 0
+            AudioObjectGetPropertyDataSize(device, &streams, 0, nil, &streamsSize)
+            return streamsSize > 0 && AudioInputDevices.isBluetooth(device)
+        }
+    }
+
+    private func nominalSampleRate(_ device: AudioDeviceID) -> Double {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain
+        )
+        var rate: Float64 = 0
+        var size = UInt32(MemoryLayout<Float64>.size)
+        AudioObjectGetPropertyData(device, &address, 0, nil, &size, &rate)
+        return rate
     }
 
     func testHandoffKeepsCaptureOrderWhenEarlierSlotsAreReused() throws {

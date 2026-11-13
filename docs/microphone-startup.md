@@ -1,5 +1,7 @@
 # Microphone startup
 
+Historical: 2.6.2 replaced the `AVAudioEngine` capture described here with a HAL IOProc. See `docs/bluetooth-headset-playback.md`.
+
 The October 14, 2026 crash occurred while dictation opened the microphone, before speech inference. The macOS report records SIGABRT and an uncaught `com.apple.coreaudio.avfaudio` exception in `AVAudioEngineGraph::InstallTapOnNode`, called from `MicCapture.start()`.
 
 The audio log identifies the failure: the hardware input changed from 16,000 Hz to 48,000 Hz, but the tap requested the old 16,000 Hz format. The exception says `Failed to create tap due to format mismatch`. The app's Bluetooth fallback selects the built-in microphone through the input audio unit, while the engine's output bus can retain its earlier format. Reading that output format for the tap caused the mismatch. The report does not indicate an out-of-memory termination. The affected Mac has an M4 and 16 GB RAM.

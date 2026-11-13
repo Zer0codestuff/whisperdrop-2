@@ -68,6 +68,55 @@ enum AudioInputDevices {
         return kind == kAudioDeviceTransportTypeBluetooth || kind == kAudioDeviceTransportTypeBluetoothLE
     }
 
+    /// The device capture opens: the default input, except that a Bluetooth default gives way to a built-in microphone.
+    /// Opening a Bluetooth headset microphone drops that headset into its low-quality speaking mode.
+    static func preferredInput() -> AudioDeviceID? {
+        guard let current = defaultInput() else { return builtInInput() }
+        if isBluetooth(current), let builtIn = builtInInput() { return builtIn }
+        return current
+    }
+
+    /// Format an IOProc receives for the first input stream of `device`.
+    static func inputFormat(_ device: AudioDeviceID) -> AudioStreamBasicDescription? {
+        var streamsAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreams,
+            mScope: kAudioObjectPropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(device, &streamsAddress, 0, nil, &size) == noErr,
+              size >= UInt32(MemoryLayout<AudioStreamID>.size) else {
+            return nil
+        }
+        var streams = [AudioStreamID](repeating: 0, count: Int(size) / MemoryLayout<AudioStreamID>.size)
+        guard AudioObjectGetPropertyData(device, &streamsAddress, 0, nil, &size, &streams) == noErr,
+              let stream = streams.first else {
+            return nil
+        }
+        var formatAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioStreamPropertyVirtualFormat,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var format = AudioStreamBasicDescription()
+        var formatSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        guard AudioObjectGetPropertyData(stream, &formatAddress, 0, nil, &formatSize, &format) == noErr else {
+            return nil
+        }
+        return format
+    }
+
+    static func isAlive(_ device: AudioDeviceID) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceIsAlive,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var alive: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        return AudioObjectGetPropertyData(device, &address, 0, nil, &size, &alive) == noErr && alive != 0
+    }
+
     private static func allDevices() -> [AudioDeviceID] {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
